@@ -1,0 +1,6 @@
+.next/
+node_modules/
+test-loaded.png
+test-workbench.png
+test-export.pdf
+test-ui.cjs

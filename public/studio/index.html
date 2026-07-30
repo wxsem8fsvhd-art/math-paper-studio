@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="从多个数学试卷 PDF 中框选题目，统一尺寸和版式，导出新的练习 PDF。"
+    />
+    <title>组题工坊 · 数学练习排版</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">∑</span>
+        <div>
+          <strong>组题工坊</strong>
+          <span>数学练习排版</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="save-status" id="saveStatus"><i></i> 已自动保存</span>
+        <button class="button button-quiet" id="clearAllButton" type="button">清空</button>
+        <button class="button button-primary" id="exportButton" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 18v2h14v-2" />
+          </svg>
+          导出 PDF
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="source-panel panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">01 · 素材</span>
+            <h1>选择试卷</h1>
+          </div>
+          <button
+            class="icon-button"
+            id="addFilesButton"
+            type="button"
+            title="添加 PDF"
+            aria-label="添加 PDF"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+        </div>
+
+        <input id="fileInput" type="file" accept="application/pdf,.pdf" multiple hidden />
+
+        <button class="upload-zone" id="uploadZone" type="button">
+          <span class="upload-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 16V4m0 0 4 4m-4-4-4 4M4 15v5h16v-5" />
+            </svg>
+          </span>
+          <strong>上传 PDF 试卷</strong>
+          <small>支持一次选择多个文件</small>
+        </button>
+
+        <div class="document-list" id="documentList">
+          <div class="empty-note">
+            <span>还没有试卷</span>
+            上传后会在这里按文档和页码整理
+          </div>
+        </div>
+      </aside>
+
+      <section class="crop-panel panel">
+        <div class="panel-heading crop-heading">
+          <div>
+            <span class="eyebrow">02 · 框选</span>
+            <h2 id="pageTitle">从页面中框选题目</h2>
+          </div>
+          <div class="page-controls" aria-label="翻页">
+            <button class="icon-button" id="prevPageButton" type="button" aria-label="上一页" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            </button>
+            <span id="pageCounter">— / —</span>
+            <button class="icon-button" id="nextPageButton" type="button" aria-label="下一页" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="viewer-toolbar">
+          <div class="tool-hint">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m6 4 12 8-7 2-3 6z" />
+            </svg>
+            <span id="toolHint">上传 PDF 后，拖动鼠标框出一道题</span>
+          </div>
+          <div class="zoom-controls">
+            <button class="icon-button small" id="zoomOutButton" type="button" title="缩小" disabled>−</button>
+            <span id="zoomLabel">100%</span>
+            <button class="icon-button small" id="zoomInButton" type="button" title="放大" disabled>+</button>
+          </div>
+        </div>
+
+        <div class="viewer-stage" id="viewerStage">
+          <div class="viewer-empty" id="viewerEmpty">
+            <div class="empty-sheet">
+              <div class="empty-lines"><i></i><i></i><i></i><i></i></div>
+              <span class="selection-demo"></span>
+            </div>
+            <h3>先放入一份试卷</h3>
+            <p>打开任意一页，用鼠标拖框选中完整题目；题号、图形和公式都会原样保留。</p>
+            <button class="button button-primary" id="emptyUploadButton" type="button">选择 PDF</button>
+          </div>
+          <div class="canvas-wrap" id="canvasWrap" hidden>
+            <canvas id="pdfCanvas"></canvas>
+            <div class="selection-layer" id="selectionLayer" aria-label="题目框选区域">
+              <div class="selection-box" id="selectionBox" hidden>
+                <span class="selection-size" id="selectionSize"></span>
+                <i class="handle nw"></i><i class="handle ne"></i>
+                <i class="handle sw"></i><i class="handle se"></i>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="selection-action" id="selectionAction" hidden>
+          <div>
+            <strong>已框选题目</strong>
+            <span id="selectionMeta">拖动边框可重新选择</span>
+          </div>
+          <div>
+            <button class="button button-quiet" id="cancelSelectionButton" type="button">取消</button>
+            <button class="button button-primary" id="addQuestionButton" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+              加入练习
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="compose-panel panel">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">03 · 编排</span>
+            <h2>练习题单 <span class="count-badge" id="questionCount">0</span></h2>
+          </div>
+          <button
+            class="icon-button"
+            id="previewButton"
+            type="button"
+            title="预览排版"
+            aria-label="预览排版"
+            disabled
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+              <circle cx="12" cy="12" r="2.5" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="question-list" id="questionList">
+          <div class="question-empty">
+            <span>+</span>
+            <strong>框选的题目会出现在这里</strong>
+            <p>可以拖动排序，也能单独调整题目宽度。</p>
+          </div>
+        </div>
+
+        <div class="layout-settings">
+          <button class="settings-heading" id="settingsToggle" type="button" aria-expanded="true">
+            <span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" />
+              </svg>
+              排版设置
+            </span>
+            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+
+          <div class="settings-body" id="settingsBody">
+            <label class="field">
+              <span>练习标题</span>
+              <input id="paperTitle" type="text" value="数学专题练习" maxlength="40" />
+            </label>
+            <div class="field-row">
+              <label class="field">
+                <span>纸张</span>
+                <select id="paperSize">
+                  <option value="a4" selected>A4 纵向</option>
+                  <option value="a4-landscape">A4 横向</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>分栏</span>
+                <select id="columns">
+                  <option value="1" selected>单栏</option>
+                  <option value="2">双栏</option>
+                </select>
+              </label>
+            </div>
+            <div class="range-field">
+              <div><span>页面留白</span><output id="marginOutput">16 mm</output></div>
+              <input id="pageMargin" type="range" min="10" max="25" value="16" />
+            </div>
+            <div class="range-field">
+              <div><span>题目间距</span><output id="gapOutput">8 mm</output></div>
+              <input id="questionGap" type="range" min="4" max="16" value="8" />
+            </div>
+            <label class="switch-row">
+              <span>
+                <strong>自动添加题号</strong>
+                <small>在每道题前标注 1、2、3…</small>
+              </span>
+              <input id="showNumbers" type="checkbox" checked />
+              <i></i>
+            </label>
+            <label class="switch-row">
+              <span>
+                <strong>保留来源</strong>
+                <small>在题目下方显示文档和页码</small>
+              </span>
+              <input id="showSources" type="checkbox" />
+              <i></i>
+            </label>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <div class="modal" id="previewModal" hidden>
+      <div class="modal-backdrop" data-close-modal></div>
+      <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+        <header class="modal-header">
+          <div>
+            <span class="eyebrow">打印预览</span>
+            <h2 id="previewTitle">排版效果</h2>
+          </div>
+          <div class="modal-actions">
+            <button class="button button-quiet" id="modalExportButton" type="button">导出 PDF</button>
+            <button class="icon-button" id="closeModalButton" type="button" aria-label="关闭预览">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
+        </header>
+        <div class="preview-summary" id="previewSummary"></div>
+        <div class="preview-pages" id="previewPages"></div>
+      </section>
+    </div>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+    <script src="./vendor/jspdf.umd.min.js"></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
