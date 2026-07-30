@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=7" />
   </head>
   <body>
     <header class="topbar">
@@ -42,22 +42,30 @@
             <span class="eyebrow">01 · 素材</span>
             <h1>选择试卷</h1>
           </div>
-          <button
+          <label
             class="icon-button"
             id="addFilesButton"
-            type="button"
+            for="fileInput"
+            role="button"
+            tabindex="0"
             title="添加 PDF"
             aria-label="添加 PDF"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 5v14M5 12h14" />
             </svg>
-          </button>
+          </label>
         </div>
 
-        <input id="fileInput" type="file" accept="application/pdf,.pdf" multiple hidden />
+        <input
+          class="visually-hidden-file-input"
+          id="fileInput"
+          type="file"
+          accept="application/pdf,.pdf"
+          multiple
+        />
 
-        <button class="upload-zone" id="uploadZone" type="button">
+        <label class="upload-zone" id="uploadZone" for="fileInput" role="button" tabindex="0">
           <span class="upload-icon">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 16V4m0 0 4 4m-4-4-4 4M4 15v5h16v-5" />
@@ -65,7 +73,7 @@
           </span>
           <strong>上传 PDF 试卷</strong>
           <small>支持多个文件 · 不上传试卷</small>
-        </button>
+        </label>
 
         <div class="document-list" id="documentList">
           <div class="empty-note">
@@ -134,7 +142,13 @@
             </div>
             <h3>先放入一份试卷</h3>
             <p>打开任意一页，用鼠标拖框选中完整题目；题号、图形和公式都会原样保留。</p>
-            <button class="button button-primary" id="emptyUploadButton" type="button">选择 PDF</button>
+            <label
+              class="button button-primary"
+              id="emptyUploadButton"
+              for="fileInput"
+              role="button"
+              tabindex="0"
+            >选择 PDF</label>
           </div>
           <div class="canvas-wrap" id="canvasWrap" hidden>
             <canvas id="pdfCanvas"></canvas>
@@ -276,6 +290,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=7"></script>
   </body>
 </html>

@@ -861,9 +861,13 @@ function clearAll() {
   toast("工作台已清空。");
 }
 
-elements.addFilesButton.addEventListener("click", () => elements.fileInput.click());
-elements.uploadZone.addEventListener("click", () => elements.fileInput.click());
-elements.emptyUploadButton.addEventListener("click", () => elements.fileInput.click());
+[elements.addFilesButton, elements.uploadZone, elements.emptyUploadButton].forEach((trigger) => {
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    elements.fileInput.click();
+  });
+});
 elements.fileInput.addEventListener("change", (event) => {
   handleFiles(event.target.files);
   event.target.value = "";
