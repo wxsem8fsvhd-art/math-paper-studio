@@ -503,6 +503,7 @@ async function addSelectedQuestion() {
     sourceName: document.name,
     sourcePage: state.activePage,
     size: "standard",
+    answerSpace: "none",
   });
 
   clearSelection();
@@ -521,7 +522,7 @@ function renderQuestions() {
       <div class="question-empty">
         <span>+</span>
         <strong>框选的题目会出现在这里</strong>
-        <p>可以拖动排序，也能单独调整题目宽度。</p>
+        <p>可以拖动排序，也能单独调整题目宽度和答题区。</p>
       </div>`;
     return;
   }
@@ -548,14 +549,25 @@ function renderQuestions() {
                 </button>
               </span>
             </div>
-            <label class="width-choice">
-              题目宽度
-              <select data-question-size="${question.id}">
-                <option value="compact" ${question.size === "compact" ? "selected" : ""}>紧凑</option>
-                <option value="standard" ${question.size === "standard" ? "selected" : ""}>标准</option>
-                <option value="full" ${question.size === "full" ? "selected" : ""}>通栏</option>
-              </select>
-            </label>
+            <div class="question-options">
+              <label class="question-option">
+                <span>题目宽度</span>
+                <select data-question-size="${question.id}">
+                  <option value="compact" ${question.size === "compact" ? "selected" : ""}>紧凑</option>
+                  <option value="standard" ${question.size === "standard" ? "selected" : ""}>标准</option>
+                  <option value="full" ${question.size === "full" ? "selected" : ""}>通栏</option>
+                </select>
+              </label>
+              <label class="question-option">
+                <span>答题区</span>
+                <select data-answer-space="${question.id}">
+                  <option value="none" ${(question.answerSpace || "none") === "none" ? "selected" : ""}>不留</option>
+                  <option value="small" ${question.answerSpace === "small" ? "selected" : ""}>小 · 20 mm</option>
+                  <option value="medium" ${question.answerSpace === "medium" ? "selected" : ""}>中 · 35 mm</option>
+                  <option value="large" ${question.answerSpace === "large" ? "selected" : ""}>大 · 50 mm</option>
+                </select>
+              </label>
+            </div>
           </div>
         </article>`,
     )
@@ -686,13 +698,24 @@ async function buildPaperCanvases(scale = 2) {
     let imageWidth = availableWidth - numberWidth;
     let imageHeight = imageWidth * (image.height / image.width);
     const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
-    const maxImageHeight = bottomLimit - contentTop - sourceHeight - gap;
+    const answerSpaceMm = {
+      none: 0,
+      small: 20,
+      medium: 35,
+      large: 50,
+    }[question.answerSpace || "none"];
+    const answerHeight = answerSpaceMm * pxPerMm;
+    const answerGap = answerHeight > 0 ? 4 * pxPerMm : 0;
+    const maxImageHeight = Math.max(
+      12 * pxPerMm,
+      bottomLimit - contentTop - sourceHeight - answerGap - answerHeight - gap,
+    );
     if (imageHeight > maxImageHeight) {
       const fit = maxImageHeight / imageHeight;
       imageWidth *= fit;
       imageHeight *= fit;
     }
-    const blockHeight = imageHeight + sourceHeight + gap;
+    const blockHeight = imageHeight + sourceHeight + answerGap + answerHeight + gap;
 
     let columnIndex = positions[0].y <= positions[positions.length - 1].y ? 0 : positions.length - 1;
     if (config.columns === 2 && requiredColumns === 1) {
@@ -703,7 +726,21 @@ async function buildPaperCanvases(scale = 2) {
       const startY = Math.max(positions[0].y, positions[1].y);
       if (startY + blockHeight > bottomLimit) newPage();
       const y = Math.max(positions[0].y, positions[1].y);
-      drawQuestion(context, question, image, index, margin, y, imageWidth, imageHeight, numberWidth, config, pxPerMm);
+      drawQuestion(
+        context,
+        question,
+        image,
+        index,
+        margin,
+        y,
+        imageWidth,
+        imageHeight,
+        numberWidth,
+        answerHeight,
+        answerGap,
+        config,
+        pxPerMm,
+      );
       positions[0].y = y + blockHeight;
       positions[1].y = y + blockHeight;
     } else {
@@ -718,7 +755,21 @@ async function buildPaperCanvases(scale = 2) {
       }
       const x = positions[columnIndex].x;
       const y = positions[columnIndex].y;
-      drawQuestion(context, question, image, index, x, y, imageWidth, imageHeight, numberWidth, config, pxPerMm);
+      drawQuestion(
+        context,
+        question,
+        image,
+        index,
+        x,
+        y,
+        imageWidth,
+        imageHeight,
+        numberWidth,
+        answerHeight,
+        answerGap,
+        config,
+        pxPerMm,
+      );
       positions[columnIndex].y += blockHeight;
     }
   }
@@ -744,6 +795,8 @@ function drawQuestion(
   imageWidth,
   imageHeight,
   numberWidth,
+  answerHeight,
+  answerGap,
   config,
   pxPerMm,
 ) {
@@ -769,6 +822,31 @@ function drawQuestion(
       x + numberWidth + imageWidth,
       y + imageHeight + 1.2 * pxPerMm,
     );
+  }
+
+  if (answerHeight > 0) {
+    const answerX = x + numberWidth;
+    const answerY = y + imageHeight + (config.showSources ? 5 * pxPerMm : 0) + answerGap;
+    const answerWidth = imageWidth;
+
+    context.save();
+    context.fillStyle = "#8b96a6";
+    context.font = `${Math.round(3 * pxPerMm)}px "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+    context.textAlign = "left";
+    context.textBaseline = "top";
+    context.fillText("答题区", answerX, answerY);
+
+    context.strokeStyle = "#d8dee7";
+    context.lineWidth = Math.max(1, 0.2 * pxPerMm);
+    const firstLineY = answerY + 7 * pxPerMm;
+    const lineGap = 8 * pxPerMm;
+    for (let lineY = firstLineY; lineY <= answerY + answerHeight - 2 * pxPerMm; lineY += lineGap) {
+      context.beginPath();
+      context.moveTo(answerX, lineY);
+      context.lineTo(answerX + answerWidth, lineY);
+      context.stroke();
+    }
+    context.restore();
   }
 }
 
@@ -1122,10 +1200,17 @@ elements.questionList.addEventListener("click", (event) => {
 });
 
 elements.questionList.addEventListener("change", (event) => {
-  const select = event.target.closest("[data-question-size]");
-  if (!select) return;
-  const question = state.questions.find((item) => item.id === select.dataset.questionSize);
-  if (question) question.size = select.value;
+  const sizeSelect = event.target.closest("[data-question-size]");
+  if (sizeSelect) {
+    const question = state.questions.find((item) => item.id === sizeSelect.dataset.questionSize);
+    if (question) question.size = sizeSelect.value;
+    return;
+  }
+
+  const answerSelect = event.target.closest("[data-answer-space]");
+  if (!answerSelect) return;
+  const question = state.questions.find((item) => item.id === answerSelect.dataset.answerSpace);
+  if (question) question.answerSpace = answerSelect.value;
 });
 
 elements.settingsToggle.addEventListener("click", () => {

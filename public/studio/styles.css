@@ -952,18 +952,25 @@ svg {
   height: 15px;
 }
 
-.width-choice {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+.question-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
   margin-top: 7px;
+}
+
+.question-option {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
   color: #7e8999;
   font-size: 9px;
 }
 
-.width-choice select {
+.question-option select {
   height: 25px;
-  flex: 1;
+  width: 100%;
+  min-width: 0;
   padding: 0 6px;
   color: #4c5a70;
   font-size: 10px;
