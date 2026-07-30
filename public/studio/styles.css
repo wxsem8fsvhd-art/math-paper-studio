@@ -1391,7 +1391,14 @@ input[type="range"] {
 
 .modal-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.ruler-toggle.active {
+  color: #fff;
+  background: #2878f0;
+  border-color: #2878f0;
 }
 
 .preview-summary {
@@ -1413,7 +1420,12 @@ input[type="range"] {
   overflow: auto;
 }
 
+.preview-pages.ruler-visible {
+  padding-right: 76px;
+}
+
 .preview-page {
+  position: relative;
   flex: 0 0 auto;
   background: #fff;
   box-shadow: 0 9px 30px rgba(35, 47, 64, 0.16);
@@ -1423,6 +1435,50 @@ input[type="range"] {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.preview-ruler {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 10px);
+  width: 42px;
+  height: 100%;
+  color: #66758a;
+  font-size: 9px;
+  border-left: 1px solid #aab5c4;
+  pointer-events: none;
+  user-select: none;
+}
+
+.preview-pages:not(.ruler-visible) .preview-ruler {
+  display: none;
+}
+
+.preview-ruler-tick {
+  position: absolute;
+  left: -1px;
+  width: 6px;
+  height: 1px;
+  background: #aab5c4;
+  transform: translateY(-0.5px);
+}
+
+.preview-ruler-tick.major {
+  width: 10px;
+  background: #66758a;
+}
+
+.preview-ruler-tick.major::after {
+  position: absolute;
+  left: 14px;
+  top: 0;
+  content: attr(data-mm);
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.preview-ruler-tick.major:first-child::after {
+  transform: none;
 }
 
 .toast-region {

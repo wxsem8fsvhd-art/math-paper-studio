@@ -59,6 +59,7 @@ const elements = {
   previewModal: $("#previewModal"),
   previewPages: $("#previewPages"),
   previewSummary: $("#previewSummary"),
+  previewRulerToggle: $("#previewRulerToggle"),
   closeModalButton: $("#closeModalButton"),
   modalExportButton: $("#modalExportButton"),
   toastRegion: $("#toastRegion"),
@@ -78,6 +79,7 @@ const state = {
   renderToken: 0,
   activeDay: 1,
   collapsedDays: new Set(),
+  showPreviewRuler: false,
 };
 
 const thumbnailState = {
@@ -874,33 +876,25 @@ async function buildPaperCanvases(scale = 2) {
     const answerSpaceMm = getQuestionAnswerSpaceMm(question);
     const answerHeight = answerSpaceMm * pxPerMm;
     const answerGap = answerHeight > 0 ? 4 * pxPerMm : 0;
-    const maximumFirstAnswerHeight = Math.max(
-      0,
-      bottomLimit - contentTop - dayHeaderHeight - sourceHeight - answerGap - gap - 12 * pxPerMm,
-    );
-    const firstAnswerHeight = Math.min(answerHeight, maximumFirstAnswerHeight);
-    let remainingAnswerHeight = answerHeight - firstAnswerHeight;
+    // The selected question width must not be sacrificed to make answer space fit.
+    // Only scale an unusually tall crop enough for the question itself to fit on a
+    // fresh page; any answer space that does not fit continues on following pages.
     const maxImageHeight = Math.max(
       12 * pxPerMm,
-      bottomLimit -
-        contentTop -
-        dayHeaderHeight -
-        sourceHeight -
-        answerGap -
-        firstAnswerHeight -
-        gap,
+      bottomLimit - contentTop - dayHeaderHeight - sourceHeight - gap,
     );
     if (imageHeight > maxImageHeight) {
       const fit = maxImageHeight / imageHeight;
       imageWidth *= fit;
       imageHeight *= fit;
     }
-    const blockHeight = imageHeight + sourceHeight + answerGap + firstAnswerHeight + gap;
+    const questionOnlyHeight = imageHeight + sourceHeight + gap;
+    let remainingAnswerHeight = answerHeight;
 
     if (startsNewDay) {
       let headerY =
         config.columns === 2 ? Math.max(positions[0].y, positions[1].y) : positions[0].y;
-      if (headerY + dayHeaderHeight + blockHeight > bottomLimit) {
+      if (headerY + dayHeaderHeight + questionOnlyHeight > bottomLimit) {
         newPage();
         headerY = contentTop;
       }
@@ -918,8 +912,16 @@ async function buildPaperCanvases(scale = 2) {
 
     if (requiredColumns === 2) {
       const startY = Math.max(positions[0].y, positions[1].y);
-      if (startY + blockHeight > bottomLimit) newPage();
+      if (startY + questionOnlyHeight > bottomLimit) newPage();
       const y = Math.max(positions[0].y, positions[1].y);
+      const maximumFirstAnswerHeight = Math.max(
+        0,
+        bottomLimit - y - imageHeight - sourceHeight - answerGap - gap,
+      );
+      const firstAnswerHeight = Math.min(answerHeight, maximumFirstAnswerHeight);
+      const firstAnswerGap = firstAnswerHeight > 0 ? answerGap : 0;
+      const blockHeight =
+        imageHeight + sourceHeight + firstAnswerGap + firstAnswerHeight + gap;
       drawQuestion(
         context,
         question,
@@ -931,16 +933,17 @@ async function buildPaperCanvases(scale = 2) {
         imageHeight,
         numberWidth,
         firstAnswerHeight,
-        answerGap,
+        firstAnswerGap,
         config,
         pxPerMm,
       );
       positions[0].y = y + blockHeight;
       positions[1].y = y + blockHeight;
+      remainingAnswerHeight = answerHeight - firstAnswerHeight;
     } else {
-      if (positions[columnIndex].y + blockHeight > bottomLimit) {
+      if (positions[columnIndex].y + questionOnlyHeight > bottomLimit) {
         const other = config.columns === 2 ? 1 - columnIndex : -1;
-        if (other >= 0 && positions[other].y + blockHeight <= bottomLimit) {
+        if (other >= 0 && positions[other].y + questionOnlyHeight <= bottomLimit) {
           columnIndex = other;
         } else {
           newPage();
@@ -949,6 +952,14 @@ async function buildPaperCanvases(scale = 2) {
       }
       const x = positions[columnIndex].x;
       const y = positions[columnIndex].y;
+      const maximumFirstAnswerHeight = Math.max(
+        0,
+        bottomLimit - y - imageHeight - sourceHeight - answerGap - gap,
+      );
+      const firstAnswerHeight = Math.min(answerHeight, maximumFirstAnswerHeight);
+      const firstAnswerGap = firstAnswerHeight > 0 ? answerGap : 0;
+      const blockHeight =
+        imageHeight + sourceHeight + firstAnswerGap + firstAnswerHeight + gap;
       drawQuestion(
         context,
         question,
@@ -960,11 +971,12 @@ async function buildPaperCanvases(scale = 2) {
         imageHeight,
         numberWidth,
         firstAnswerHeight,
-        answerGap,
+        firstAnswerGap,
         config,
         pxPerMm,
       );
       positions[columnIndex].y += blockHeight;
+      remainingAnswerHeight = answerHeight - firstAnswerHeight;
     }
 
     while (remainingAnswerHeight > 0) {
@@ -1083,6 +1095,7 @@ async function openPreview() {
     state.previewCanvases = await buildPaperCanvases(1.3);
     const config = getLayoutConfig();
     elements.previewPages.innerHTML = "";
+    updatePreviewRulerState();
     state.previewCanvases.forEach((canvas) => {
       const page = document.createElement("div");
       page.className = "preview-page";
@@ -1090,6 +1103,7 @@ async function openPreview() {
       page.style.width = `${displayWidth}px`;
       page.style.aspectRatio = `${config.widthMm} / ${config.heightMm}`;
       page.append(canvas);
+      page.append(createPreviewRuler(config.heightMm));
       elements.previewPages.append(page);
     });
     elements.previewSummary.textContent = `${state.questions.length} 道题 · ${state.previewCanvases.length} 页 · ${config.columns === 1 ? "单栏" : "双栏"} A4`;
@@ -1097,6 +1111,29 @@ async function openPreview() {
     console.error(error);
     elements.previewPages.innerHTML = `<div class="empty-note">预览生成失败，请重试。</div>`;
   }
+}
+
+function createPreviewRuler(heightMm) {
+  const ruler = document.createElement("div");
+  ruler.className = "preview-ruler";
+  ruler.setAttribute("aria-hidden", "true");
+
+  for (let mm = 0; mm <= heightMm; mm += 5) {
+    const tick = document.createElement("span");
+    const isMajor = mm % 10 === 0;
+    tick.className = `preview-ruler-tick${isMajor ? " major" : ""}`;
+    tick.style.top = `${(mm / heightMm) * 100}%`;
+    if (isMajor) tick.dataset.mm = String(mm);
+    ruler.append(tick);
+  }
+
+  return ruler;
+}
+
+function updatePreviewRulerState() {
+  elements.previewPages.classList.toggle("ruler-visible", state.showPreviewRuler);
+  elements.previewRulerToggle.classList.toggle("active", state.showPreviewRuler);
+  elements.previewRulerToggle.setAttribute("aria-pressed", String(state.showPreviewRuler));
 }
 
 function closePreview() {
@@ -1495,6 +1532,10 @@ elements.questionGap.addEventListener("input", () => {
 });
 
 elements.previewButton.addEventListener("click", openPreview);
+elements.previewRulerToggle.addEventListener("click", () => {
+  state.showPreviewRuler = !state.showPreviewRuler;
+  updatePreviewRulerState();
+});
 elements.closeModalButton.addEventListener("click", closePreview);
 $("[data-close-modal]").addEventListener("click", closePreview);
 elements.modalExportButton.addEventListener("click", exportPdf);

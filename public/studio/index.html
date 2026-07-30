@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=12" />
+    <link rel="stylesheet" href="./styles.css?v=13" />
   </head>
   <body>
     <header class="topbar">
@@ -332,6 +332,15 @@
             <h2 id="previewTitle">排版效果</h2>
           </div>
           <div class="modal-actions">
+            <button
+              class="button button-quiet ruler-toggle"
+              id="previewRulerToggle"
+              type="button"
+              aria-pressed="false"
+              title="只在预览中显示，不会导出"
+            >
+              毫米标尺
+            </button>
             <button class="button button-quiet" id="modalExportButton" type="button">导出 PDF</button>
             <button class="icon-button" id="closeModalButton" type="button" aria-label="关闭预览">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
@@ -346,6 +355,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=12"></script>
+    <script type="module" src="./app.js?v=13"></script>
   </body>
 </html>
