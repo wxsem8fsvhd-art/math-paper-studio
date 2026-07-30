@@ -99,10 +99,30 @@
             </svg>
             <span id="toolHint">上传 PDF 后，拖动鼠标框出一道题</span>
           </div>
-          <div class="zoom-controls">
-            <button class="icon-button small" id="zoomOutButton" type="button" title="缩小" disabled>−</button>
-            <span id="zoomLabel">100%</span>
-            <button class="icon-button small" id="zoomInButton" type="button" title="放大" disabled>+</button>
+          <div class="viewer-controls">
+            <div class="scroll-controls" aria-label="页面上下滚动">
+              <button
+                class="icon-button small"
+                id="scrollUpButton"
+                type="button"
+                title="向上滚动"
+                aria-label="向上滚动"
+                disabled
+              >↑</button>
+              <button
+                class="icon-button small"
+                id="scrollDownButton"
+                type="button"
+                title="向下滚动"
+                aria-label="向下滚动"
+                disabled
+              >↓</button>
+            </div>
+            <div class="zoom-controls" aria-label="页面缩放">
+              <button class="icon-button small" id="zoomOutButton" type="button" title="缩小" disabled>−</button>
+              <span id="zoomLabel">100%</span>
+              <button class="icon-button small" id="zoomInButton" type="button" title="放大" disabled>+</button>
+            </div>
           </div>
         </div>
 

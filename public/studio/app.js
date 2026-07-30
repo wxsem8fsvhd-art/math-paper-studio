@@ -27,6 +27,8 @@ const elements = {
   addQuestionButton: $("#addQuestionButton"),
   cancelSelectionButton: $("#cancelSelectionButton"),
   toolHint: $("#toolHint"),
+  scrollUpButton: $("#scrollUpButton"),
+  scrollDownButton: $("#scrollDownButton"),
   zoomOutButton: $("#zoomOutButton"),
   zoomInButton: $("#zoomInButton"),
   zoomLabel: $("#zoomLabel"),
@@ -67,6 +69,15 @@ const state = {
   renderToken: 0,
 };
 
+const thumbnailState = {
+  observer: null,
+  queue: [],
+  active: 0,
+  generation: 0,
+};
+
+const MAX_THUMBNAIL_WORKERS = 2;
+
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 function toast(message, type = "success") {
@@ -106,18 +117,29 @@ async function handleFiles(files) {
 
   setSaveStatus("正在读取 PDF", true);
   for (const file of pdfFiles) {
+    const objectUrl = URL.createObjectURL(file);
     try {
-      const data = new Uint8Array(await file.arrayBuffer());
-      const pdf = await pdfjsLib.getDocument({ data }).promise;
+      const loadingTask = pdfjsLib.getDocument({
+        url: objectUrl,
+        disableAutoFetch: true,
+        rangeChunkSize: 1024 * 1024,
+      });
+      loadingTask.onProgress = ({ loaded, total }) => {
+        const percent = total ? ` ${Math.min(100, Math.round((loaded / total) * 100))}%` : "";
+        setSaveStatus(`正在读取 ${file.name}${percent}`, true);
+      };
+      const pdf = await loadingTask.promise;
       state.documents.push({
         id: uid(),
         name: file.name,
         size: file.size,
+        objectUrl,
         pdf,
         pages: pdf.numPages,
-        thumbnailsRendered: false,
+        thumbnailCache: new Map(),
       });
     } catch (error) {
+      URL.revokeObjectURL(objectUrl);
       console.error(error);
       toast(`无法读取「${file.name}」，文件可能已加密或损坏。`, "error");
     }
@@ -162,8 +184,13 @@ function renderDocumentList() {
             document.id === state.activeDocumentId
               ? `<div class="page-strip">${Array.from({ length: document.pages }, (_, index) => {
                   const page = index + 1;
+                  const cachedThumbnail = document.thumbnailCache.get(page);
                   return `<button class="page-thumb ${page === state.activePage ? "active" : ""}" type="button" data-page="${page}" title="第 ${page} 页">
-                    <canvas data-thumb-page="${page}"></canvas><span>${page}</span>
+                    <span class="thumb-surface" data-thumb-page="${page}">${
+                      cachedThumbnail
+                        ? `<img src="${cachedThumbnail}" alt="" />`
+                        : `<i class="thumb-placeholder" aria-hidden="true"></i>`
+                    }</span><span>${page}</span>
                   </button>`;
                 }).join("")}</div>`
               : ""
@@ -172,35 +199,87 @@ function renderDocumentList() {
     )
     .join("");
 
-  renderVisibleThumbnails();
+  observeVisibleThumbnails();
 }
 
-async function renderVisibleThumbnails() {
+function observeVisibleThumbnails() {
   const document = getActiveDocument();
   if (!document) return;
-  const canvases = $$("[data-thumb-page]");
-  const limited = canvases.slice(0, 24);
-  await Promise.all(
-    limited.map(async (canvas) => {
-      const pageNumber = Number(canvas.dataset.thumbPage);
-      try {
-        const page = await document.pdf.getPage(pageNumber);
-        const base = page.getViewport({ scale: 1 });
-        const viewport = page.getViewport({ scale: 76 / base.width });
-        const ratio = window.devicePixelRatio || 1;
-        canvas.width = Math.ceil(viewport.width * ratio);
-        canvas.height = Math.ceil(viewport.height * ratio);
-        const context = canvas.getContext("2d");
-        await page.render({
-          canvasContext: context,
-          viewport,
-          transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0],
-        }).promise;
-      } catch (error) {
-        console.warn("Thumbnail render failed", error);
-      }
-    }),
+  thumbnailState.observer?.disconnect();
+  thumbnailState.generation += 1;
+  thumbnailState.queue = [];
+  const generation = thumbnailState.generation;
+  thumbnailState.observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        thumbnailState.observer?.unobserve(entry.target);
+        queueThumbnail(document.id, entry.target, generation);
+      });
+    },
+    {
+      root: elements.documentList,
+      rootMargin: "360px 0px",
+    },
   );
+  $$("[data-thumb-page]").forEach((surface) => {
+    if (!surface.querySelector("img")) thumbnailState.observer.observe(surface);
+  });
+}
+
+function queueThumbnail(documentId, surface, generation) {
+  thumbnailState.queue.push({ documentId, surface, generation });
+  drainThumbnailQueue();
+}
+
+function drainThumbnailQueue() {
+  while (thumbnailState.active < MAX_THUMBNAIL_WORKERS && thumbnailState.queue.length) {
+    const task = thumbnailState.queue.shift();
+    thumbnailState.active += 1;
+    renderThumbnail(task).finally(() => {
+      thumbnailState.active -= 1;
+      drainThumbnailQueue();
+    });
+  }
+}
+
+async function renderThumbnail({ documentId, surface, generation }) {
+  if (generation !== thumbnailState.generation || !surface.isConnected) return;
+  const document = state.documents.find((item) => item.id === documentId);
+  if (!document) return;
+  const pageNumber = Number(surface.dataset.thumbPage);
+  const cachedThumbnail = document.thumbnailCache.get(pageNumber);
+  if (cachedThumbnail) {
+    surface.innerHTML = `<img src="${cachedThumbnail}" alt="" />`;
+    return;
+  }
+
+  try {
+    const page = await document.pdf.getPage(pageNumber);
+    if (generation !== thumbnailState.generation || !surface.isConnected) return;
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: 76 / base.width });
+    const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
+    const canvas = window.document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width * ratio);
+    canvas.height = Math.ceil(viewport.height * ratio);
+    const context = canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({
+      canvasContext: context,
+      viewport,
+      transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0],
+    }).promise;
+    if (generation !== thumbnailState.generation || !surface.isConnected) return;
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.76);
+    document.thumbnailCache.set(pageNumber, dataUrl);
+    surface.innerHTML = `<img src="${dataUrl}" alt="" />`;
+    page.cleanup();
+  } catch (error) {
+    console.warn("Thumbnail render failed", error);
+    surface.classList.add("thumb-failed");
+  }
 }
 
 async function renderActivePage() {
@@ -261,9 +340,38 @@ function updatePageControls() {
   const disabled = !document;
   elements.prevPageButton.disabled = disabled || state.activePage <= 1;
   elements.nextPageButton.disabled = disabled || state.activePage >= document.pages;
+  elements.scrollUpButton.disabled = disabled;
+  elements.scrollDownButton.disabled = disabled;
   elements.zoomOutButton.disabled = disabled || state.zoom <= 0.7;
   elements.zoomInButton.disabled = disabled || state.zoom >= 1.5;
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+}
+
+function scrollViewer(top = 0, left = 0, behavior = "smooth") {
+  elements.viewerStage.scrollBy({ top, left, behavior });
+}
+
+function autoScrollViewer(event) {
+  const rect = elements.viewerStage.getBoundingClientRect();
+  const threshold = 54;
+  const maxStep = 24;
+  let left = 0;
+  let top = 0;
+  if (event.clientX < rect.left + threshold) left = -maxStep;
+  else if (event.clientX > rect.right - threshold) left = maxStep;
+  if (event.clientY < rect.top + threshold) top = -maxStep;
+  else if (event.clientY > rect.bottom - threshold) top = maxStep;
+  if (left || top) scrollViewer(top, left, "auto");
+}
+
+function updateActiveThumbnail(scrollIntoView = false) {
+  $$(".page-thumb.active").forEach((item) => item.classList.remove("active"));
+  const activeThumbnail = $(`.page-thumb[data-page="${state.activePage}"]`);
+  if (!activeThumbnail) return;
+  activeThumbnail.classList.add("active");
+  if (scrollIntoView) {
+    activeThumbnail.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }
 }
 
 function clearSelection() {
@@ -301,16 +409,16 @@ function updateSelectionBox(rect) {
   elements.selectionSize.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
 }
 
-function finalizeSelection(rect) {
+async function finalizeSelection(rect) {
   if (rect.width < 35 || rect.height < 25) {
     clearSelection();
     return;
   }
   state.selection = rect;
-  elements.selectionAction.hidden = false;
   const ratio = rect.width / rect.height;
   elements.selectionMeta.textContent =
     ratio > 2.8 ? "横向题目 · 建议使用整栏宽度" : "拖动空白处可重新框选";
+  await addSelectedQuestion();
 }
 
 async function addSelectedQuestion() {
@@ -720,6 +828,7 @@ function formatFileSize(bytes) {
 
 function removeDocument(id) {
   const document = state.documents.find((item) => item.id === id);
+  if (document) disposeDocument(document);
   state.documents = state.documents.filter((item) => item.id !== id);
   if (state.activeDocumentId === id) {
     state.activeDocumentId = state.documents[0]?.id || null;
@@ -730,10 +839,17 @@ function removeDocument(id) {
   if (document) toast(`已移除「${document.name}」。`);
 }
 
+function disposeDocument(document) {
+  document.thumbnailCache?.clear();
+  document.pdf?.destroy().catch((error) => console.warn("PDF cleanup failed", error));
+  if (document.objectUrl) URL.revokeObjectURL(document.objectUrl);
+}
+
 function clearAll() {
   if (!state.documents.length && !state.questions.length) return;
   const confirmed = window.confirm("清空全部试卷和已选题目？这个操作无法撤销。");
   if (!confirmed) return;
+  state.documents.forEach(disposeDocument);
   state.documents = [];
   state.questions = [];
   state.activeDocumentId = null;
@@ -779,7 +895,8 @@ elements.documentList.addEventListener("click", async (event) => {
   const page = event.target.closest("[data-page]");
   if (page) {
     state.activePage = Number(page.dataset.page);
-    renderDocumentList();
+    updateActiveThumbnail(true);
+    elements.viewerStage.scrollTo({ top: 0, left: 0 });
     await renderActivePage();
     return;
   }
@@ -796,17 +913,25 @@ elements.documentList.addEventListener("click", async (event) => {
 elements.prevPageButton.addEventListener("click", async () => {
   if (state.activePage <= 1) return;
   state.activePage -= 1;
-  renderDocumentList();
+  updateActiveThumbnail(true);
+  elements.viewerStage.scrollTo({ top: 0, left: 0 });
   await renderActivePage();
 });
 elements.nextPageButton.addEventListener("click", async () => {
   const document = getActiveDocument();
   if (!document || state.activePage >= document.pages) return;
   state.activePage += 1;
-  renderDocumentList();
+  updateActiveThumbnail(true);
+  elements.viewerStage.scrollTo({ top: 0, left: 0 });
   await renderActivePage();
 });
 
+elements.scrollUpButton.addEventListener("click", () => {
+  scrollViewer(-Math.max(240, elements.viewerStage.clientHeight * 0.72));
+});
+elements.scrollDownButton.addEventListener("click", () => {
+  scrollViewer(Math.max(240, elements.viewerStage.clientHeight * 0.72));
+});
 elements.zoomOutButton.addEventListener("click", async () => {
   state.zoom = Math.max(0.7, Number((state.zoom - 0.1).toFixed(1)));
   await renderActivePage();
@@ -829,17 +954,33 @@ elements.selectionLayer.addEventListener("pointerdown", (event) => {
 
 elements.selectionLayer.addEventListener("pointermove", (event) => {
   if (!state.pointer) return;
+  autoScrollViewer(event);
   state.pointer.current = pointFromEvent(event);
   updateSelectionBox(normalizeRect(state.pointer.start, state.pointer.current));
 });
 
-elements.selectionLayer.addEventListener("pointerup", (event) => {
+elements.selectionLayer.addEventListener("pointerup", async (event) => {
   if (!state.pointer) return;
   const end = pointFromEvent(event);
   const rect = normalizeRect(state.pointer.start, end);
   state.pointer = null;
-  finalizeSelection(rect);
+  await finalizeSelection(rect);
 });
+
+elements.selectionLayer.addEventListener("pointercancel", clearSelection);
+elements.selectionLayer.addEventListener(
+  "wheel",
+  (event) => {
+    if (event.ctrlKey) return;
+    event.preventDefault();
+    if (event.shiftKey) {
+      scrollViewer(0, event.deltaY || event.deltaX, "auto");
+      return;
+    }
+    scrollViewer(event.deltaY, event.deltaX, "auto");
+  },
+  { passive: false },
+);
 
 elements.cancelSelectionButton.addEventListener("click", clearSelection);
 elements.addQuestionButton.addEventListener("click", addSelectedQuestion);
