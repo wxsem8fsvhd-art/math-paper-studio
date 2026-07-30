@@ -130,7 +130,7 @@ async function handleFiles(files) {
 
   renderDocumentList();
   await renderActivePage();
-  setSaveStatus("已自动保存");
+  setSaveStatus("仅在本机处理");
   if (pdfFiles.length > 1) toast(`已加入 ${pdfFiles.length} 份试卷。`);
 }
 
@@ -360,7 +360,7 @@ async function addSelectedQuestion() {
 
   clearSelection();
   renderQuestions();
-  setSaveStatus("已自动保存");
+  setSaveStatus("仅在本机处理");
   toast(`第 ${state.questions.length} 题已加入练习。`);
 }
 
