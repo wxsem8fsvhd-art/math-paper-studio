@@ -918,6 +918,26 @@ svg {
   white-space: nowrap;
 }
 
+.question-source-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.question-day-badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: #2878f0;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  background: #eef5ff;
+  border-radius: 4px;
+}
+
 .question-actions {
   display: flex;
   align-items: center;
@@ -968,7 +988,8 @@ svg {
 }
 
 .question-option select,
-.custom-answer-space input {
+.custom-answer-space input,
+.question-day-control input {
   height: 25px;
   width: 100%;
   min-width: 0;
@@ -978,6 +999,26 @@ svg {
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 5px;
+}
+
+.question-day-option {
+  grid-column: 1 / -1;
+}
+
+.question-day-control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 80px) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.question-day-control input {
+  appearance: textfield;
+}
+
+.question-day-control input::-webkit-inner-spin-button,
+.question-day-control input::-webkit-outer-spin-button {
+  margin: 0;
 }
 
 .custom-answer-space {

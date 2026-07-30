@@ -505,6 +505,7 @@ async function addSelectedQuestion() {
     size: "standard",
     answerSpace: "none",
     customAnswerSpaceMm: 100,
+    day: state.questions.at(-1)?.day || 1,
   });
 
   clearSelection();
@@ -523,7 +524,7 @@ function renderQuestions() {
       <div class="question-empty">
         <span>+</span>
         <strong>框选的题目会出现在这里</strong>
-        <p>可以拖动排序，也能单独调整题目宽度和答题区。</p>
+        <p>可以拖动排序，也能单独设置作业天数、题目宽度和答题区。</p>
       </div>`;
     return;
   }
@@ -538,7 +539,10 @@ function renderQuestions() {
               <img src="${question.image}" alt="第 ${index + 1} 题预览" />
             </div>
             <div class="question-meta">
-              <span class="question-source" title="${escapeHtml(question.sourceName)}">第 ${index + 1} 题 · ${escapeHtml(question.sourceName)} P${question.sourcePage}</span>
+              <span class="question-source-line">
+                <span class="question-day-badge" data-question-day-badge="${question.id}">第 ${question.day || 1} 天</span>
+                <span class="question-source" title="${escapeHtml(question.sourceName)}">第 ${index + 1} 题 · ${escapeHtml(question.sourceName)} P${question.sourcePage}</span>
+              </span>
               <span class="question-actions">
                 <button type="button" data-move-up="${question.id}" title="上移" aria-label="上移">↑</button>
                 <button type="button" data-move-down="${question.id}" title="下移" aria-label="下移">↓</button>
@@ -580,6 +584,23 @@ function renderQuestions() {
                     aria-label="自定义答题区高度"
                   />
                   <span>mm</span>
+                </span>
+              </label>
+              <label class="question-option question-day-option">
+                <span>作业安排（与题号独立）</span>
+                <span class="question-day-control">
+                  <span>第</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="365"
+                    step="1"
+                    inputmode="numeric"
+                    value="${question.day || 1}"
+                    data-question-day="${question.id}"
+                    aria-label="作业天数"
+                  />
+                  <span>天</span>
                 </span>
               </label>
             </div>
@@ -705,6 +726,13 @@ async function buildPaperCanvases(scale = 2) {
   for (let index = 0; index < state.questions.length; index += 1) {
     const question = state.questions[index];
     const image = images[index];
+    const day = Math.min(365, Math.max(1, Math.round(Number(question.day) || 1)));
+    const previousDay =
+      index > 0
+        ? Math.min(365, Math.max(1, Math.round(Number(state.questions[index - 1].day) || 1)))
+        : null;
+    const startsNewDay = index === 0 || day !== previousDay;
+    const dayHeaderHeight = startsNewDay ? 10 * pxPerMm : 0;
     const numberWidth = config.showNumbers ? 10 * pxPerMm : 0;
     const sizeFactor = question.size === "compact" ? 0.78 : question.size === "full" ? 1 : 0.9;
     const requiredColumns = question.size === "full" && config.columns === 2 ? 2 : 1;
@@ -727,13 +755,19 @@ async function buildPaperCanvases(scale = 2) {
     const answerGap = answerHeight > 0 ? 4 * pxPerMm : 0;
     const maximumFirstAnswerHeight = Math.max(
       0,
-      bottomLimit - contentTop - sourceHeight - answerGap - gap - 12 * pxPerMm,
+      bottomLimit - contentTop - dayHeaderHeight - sourceHeight - answerGap - gap - 12 * pxPerMm,
     );
     const firstAnswerHeight = Math.min(answerHeight, maximumFirstAnswerHeight);
     let remainingAnswerHeight = answerHeight - firstAnswerHeight;
     const maxImageHeight = Math.max(
       12 * pxPerMm,
-      bottomLimit - contentTop - sourceHeight - answerGap - firstAnswerHeight - gap,
+      bottomLimit -
+        contentTop -
+        dayHeaderHeight -
+        sourceHeight -
+        answerGap -
+        firstAnswerHeight -
+        gap,
     );
     if (imageHeight > maxImageHeight) {
       const fit = maxImageHeight / imageHeight;
@@ -741,6 +775,20 @@ async function buildPaperCanvases(scale = 2) {
       imageHeight *= fit;
     }
     const blockHeight = imageHeight + sourceHeight + answerGap + firstAnswerHeight + gap;
+
+    if (startsNewDay) {
+      let headerY =
+        config.columns === 2 ? Math.max(positions[0].y, positions[1].y) : positions[0].y;
+      if (headerY + dayHeaderHeight + blockHeight > bottomLimit) {
+        newPage();
+        headerY = contentTop;
+      }
+      drawDayHeader(context, day, margin, headerY, innerWidth, pxPerMm);
+      const questionStartY = headerY + dayHeaderHeight;
+      positions.forEach((position) => {
+        position.y = questionStartY;
+      });
+    }
 
     let columnIndex = positions[0].y <= positions[positions.length - 1].y ? 0 : positions.length - 1;
     if (config.columns === 2 && requiredColumns === 1) {
@@ -810,7 +858,7 @@ async function buildPaperCanvases(scale = 2) {
         imageWidth,
         continuationHeight,
         pxPerMm,
-        `第 ${index + 1} 题答题区（续）`,
+        `第 ${day} 天 · 第 ${index + 1} 题答题区（续）`,
       );
       const continuationBottom = contentTop + continuationHeight + gap;
       if (requiredColumns === 2) {
@@ -878,6 +926,16 @@ function drawQuestion(
     const answerY = y + imageHeight + (config.showSources ? 5 * pxPerMm : 0) + answerGap;
     drawAnswerArea(context, answerX, answerY, imageWidth, answerHeight, pxPerMm, "答题区");
   }
+}
+
+function drawDayHeader(context, day, x, y, width, pxPerMm) {
+  context.save();
+  context.fillStyle = "#2878f0";
+  context.font = `700 ${Math.round(4.4 * pxPerMm)}px "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  context.textAlign = "left";
+  context.textBaseline = "top";
+  context.fillText(`第 ${day} 天作业`, x, y);
+  context.restore();
 }
 
 function drawAnswerArea(context, x, y, width, height, pxPerMm, label) {
@@ -1260,12 +1318,28 @@ elements.questionList.addEventListener("change", (event) => {
 });
 
 elements.questionList.addEventListener("input", (event) => {
-  const input = event.target.closest("[data-custom-answer-space]");
-  if (!input) return;
-  const question = state.questions.find((item) => item.id === input.dataset.customAnswerSpace);
-  const value = Number(input.value);
+  const answerInput = event.target.closest("[data-custom-answer-space]");
+  if (answerInput) {
+    const question = state.questions.find(
+      (item) => item.id === answerInput.dataset.customAnswerSpace,
+    );
+    const value = Number(answerInput.value);
+    if (question && Number.isFinite(value) && value > 0) {
+      question.customAnswerSpaceMm = Math.min(500, Math.round(value));
+    }
+    return;
+  }
+
+  const dayInput = event.target.closest("[data-question-day]");
+  if (!dayInput) return;
+  const question = state.questions.find((item) => item.id === dayInput.dataset.questionDay);
+  const value = Number(dayInput.value);
   if (question && Number.isFinite(value) && value > 0) {
-    question.customAnswerSpaceMm = Math.min(500, Math.round(value));
+    question.day = Math.min(365, Math.round(value));
+    const badge = elements.questionList.querySelector(
+      `[data-question-day-badge="${question.id}"]`,
+    );
+    if (badge) badge.textContent = `第 ${question.day} 天`;
   }
 });
 
