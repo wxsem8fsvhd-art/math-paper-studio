@@ -17,6 +17,8 @@ const elements = {
   nextPageButton: $("#nextPageButton"),
   viewerEmpty: $("#viewerEmpty"),
   viewerStage: $("#viewerStage"),
+  viewerScrollRail: $("#viewerScrollRail"),
+  viewerScrollThumb: $("#viewerScrollThumb"),
   canvasWrap: $("#canvasWrap"),
   pdfCanvas: $("#pdfCanvas"),
   selectionLayer: $("#selectionLayer"),
@@ -65,6 +67,7 @@ const state = {
   questions: [],
   selection: null,
   pointer: null,
+  scrollDrag: null,
   previewCanvases: [],
   renderToken: 0,
 };
@@ -294,6 +297,7 @@ async function renderActivePage() {
     elements.pageCounter.textContent = "— / —";
     elements.toolHint.textContent = "上传 PDF 后，拖动鼠标框出一道题";
     updatePageControls();
+    updateViewerScrollRail();
     return;
   }
 
@@ -329,6 +333,7 @@ async function renderActivePage() {
 
     elements.selectionLayer.style.width = canvas.style.width;
     elements.selectionLayer.style.height = canvas.style.height;
+    requestAnimationFrame(updateViewerScrollRail);
   } catch (error) {
     console.error(error);
     toast("这一页暂时无法显示，请换一页重试。", "error");
@@ -347,8 +352,42 @@ function updatePageControls() {
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 }
 
-function scrollViewer(top = 0, left = 0, behavior = "smooth") {
-  elements.viewerStage.scrollBy({ top, left, behavior });
+function scrollViewer(top = 0, left = 0) {
+  const stage = elements.viewerStage;
+  if (top) {
+    const maxTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
+    stage.scrollTop = Math.max(0, Math.min(maxTop, stage.scrollTop + top));
+  }
+  if (left) {
+    const maxLeft = Math.max(0, stage.scrollWidth - stage.clientWidth);
+    stage.scrollLeft = Math.max(0, Math.min(maxLeft, stage.scrollLeft + left));
+  }
+  updateViewerScrollRail();
+}
+
+function updateViewerScrollRail() {
+  const stage = elements.viewerStage;
+  const rail = elements.viewerScrollRail;
+  const thumb = elements.viewerScrollThumb;
+  const maxScrollTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
+  const scrollable = Boolean(getActiveDocument()) && maxScrollTop > 2;
+
+  rail.hidden = !scrollable;
+  elements.scrollUpButton.disabled = !scrollable || stage.scrollTop <= 0;
+  elements.scrollDownButton.disabled = !scrollable || stage.scrollTop >= maxScrollTop - 1;
+  if (!scrollable) {
+    rail.setAttribute("aria-valuenow", "0");
+    return;
+  }
+
+  const railHeight = rail.clientHeight;
+  const thumbHeight = Math.max(48, Math.round(railHeight * (stage.clientHeight / stage.scrollHeight)));
+  const maxThumbTop = Math.max(0, railHeight - thumbHeight);
+  const thumbTop = maxScrollTop ? Math.round(maxThumbTop * (stage.scrollTop / maxScrollTop)) : 0;
+
+  thumb.style.height = `${thumbHeight}px`;
+  thumb.style.transform = `translateY(${thumbTop}px)`;
+  rail.setAttribute("aria-valuenow", String(Math.round((stage.scrollTop / maxScrollTop) * 100)));
 }
 
 function autoScrollViewer(event) {
@@ -972,19 +1011,92 @@ elements.selectionLayer.addEventListener("pointerup", async (event) => {
 });
 
 elements.selectionLayer.addEventListener("pointercancel", clearSelection);
-elements.selectionLayer.addEventListener(
+elements.viewerStage.addEventListener("scroll", updateViewerScrollRail, { passive: true });
+elements.viewerStage.addEventListener(
   "wheel",
   (event) => {
     if (event.ctrlKey) return;
     event.preventDefault();
+    const unit =
+      event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? 18
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? elements.viewerStage.clientHeight
+          : 1;
     if (event.shiftKey) {
-      scrollViewer(0, event.deltaY || event.deltaX, "auto");
+      scrollViewer(0, (event.deltaY || event.deltaX) * unit);
       return;
     }
-    scrollViewer(event.deltaY, event.deltaX, "auto");
+    scrollViewer(event.deltaY * unit, event.deltaX * unit);
   },
-  { passive: false },
+  { passive: false, capture: true },
 );
+
+elements.viewerScrollRail.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  const railRect = elements.viewerScrollRail.getBoundingClientRect();
+  const thumbRect = elements.viewerScrollThumb.getBoundingClientRect();
+  if (event.target === elements.viewerScrollThumb) {
+    elements.viewerScrollRail.setPointerCapture(event.pointerId);
+    state.scrollDrag = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startScrollTop: elements.viewerStage.scrollTop,
+    };
+    elements.viewerScrollThumb.classList.add("dragging");
+    return;
+  }
+
+  const direction = event.clientY < thumbRect.top ? -1 : 1;
+  const distance = Math.max(240, elements.viewerStage.clientHeight * 0.82);
+  scrollViewer(direction * distance);
+  if (event.clientY < railRect.top || event.clientY > railRect.bottom) updateViewerScrollRail();
+});
+
+elements.viewerScrollRail.addEventListener("pointermove", (event) => {
+  if (!state.scrollDrag || state.scrollDrag.pointerId !== event.pointerId) return;
+  const railHeight = elements.viewerScrollRail.clientHeight;
+  const thumbHeight = elements.viewerScrollThumb.offsetHeight;
+  const maxThumbTop = Math.max(1, railHeight - thumbHeight);
+  const maxScrollTop = Math.max(
+    0,
+    elements.viewerStage.scrollHeight - elements.viewerStage.clientHeight,
+  );
+  const scrollDelta = ((event.clientY - state.scrollDrag.startY) / maxThumbTop) * maxScrollTop;
+  elements.viewerStage.scrollTop = Math.max(
+    0,
+    Math.min(maxScrollTop, state.scrollDrag.startScrollTop + scrollDelta),
+  );
+});
+
+function finishScrollDrag(event) {
+  if (!state.scrollDrag || state.scrollDrag.pointerId !== event.pointerId) return;
+  state.scrollDrag = null;
+  elements.viewerScrollThumb.classList.remove("dragging");
+}
+
+elements.viewerScrollRail.addEventListener("pointerup", finishScrollDrag);
+elements.viewerScrollRail.addEventListener("pointercancel", finishScrollDrag);
+elements.viewerScrollRail.addEventListener("keydown", (event) => {
+  const pageDistance = Math.max(240, elements.viewerStage.clientHeight * 0.82);
+  const keyActions = {
+    ArrowUp: () => scrollViewer(-80),
+    ArrowDown: () => scrollViewer(80),
+    PageUp: () => scrollViewer(-pageDistance),
+    PageDown: () => scrollViewer(pageDistance),
+    Home: () => {
+      elements.viewerStage.scrollTop = 0;
+    },
+    End: () => {
+      elements.viewerStage.scrollTop = elements.viewerStage.scrollHeight;
+    },
+  };
+  const action = keyActions[event.key];
+  if (!action) return;
+  event.preventDefault();
+  action();
+  updateViewerScrollRail();
+});
 
 elements.cancelSelectionButton.addEventListener("click", clearSelection);
 elements.addQuestionButton.addEventListener("click", addSelectedQuestion);
@@ -1038,6 +1150,7 @@ elements.clearAllButton.addEventListener("click", clearAll);
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.previewModal.hidden) closePreview();
 });
+window.addEventListener("resize", updateViewerScrollRail);
 
 renderQuestions();
 updatePageControls();

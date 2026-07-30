@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=7" />
+    <link rel="stylesheet" href="./styles.css?v=8" />
   </head>
   <body>
     <header class="topbar">
@@ -175,6 +175,22 @@
             </button>
           </div>
         </div>
+
+        <div
+          class="viewer-scroll-rail"
+          id="viewerScrollRail"
+          role="scrollbar"
+          aria-label="PDF 页面纵向滚动"
+          aria-controls="viewerStage"
+          aria-orientation="vertical"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          tabindex="0"
+          hidden
+        >
+          <span class="viewer-scroll-thumb" id="viewerScrollThumb"></span>
+        </div>
       </section>
 
       <aside class="compose-panel panel">
@@ -290,6 +306,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=7"></script>
+    <script type="module" src="./app.js?v=8"></script>
   </body>
 </html>

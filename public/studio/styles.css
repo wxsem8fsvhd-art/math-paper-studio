@@ -499,8 +499,12 @@ svg {
 
 .crop-panel {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+  position: relative;
   display: grid;
   grid-template-rows: 82px 45px minmax(0, 1fr) auto;
+  overflow: hidden;
   background: #f2f4f7;
 }
 
@@ -559,16 +563,16 @@ svg {
 .viewer-stage {
   min-height: 0;
   position: relative;
+  margin-right: 14px;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-gutter: stable both-edges;
   background-color: #eef1f4;
   background-image: radial-gradient(#d8dee6 0.75px, transparent 0.75px);
   background-size: 14px 14px;
 }
 
 .viewer-stage::-webkit-scrollbar {
-  width: 13px;
+  width: 0;
   height: 13px;
 }
 
@@ -584,6 +588,46 @@ svg {
 
 .viewer-stage::-webkit-scrollbar-thumb:hover {
   background: #8794a6;
+}
+
+.viewer-scroll-rail {
+  position: absolute;
+  z-index: 12;
+  top: 127px;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  background: #e1e6ec;
+  border-left: 1px solid #cfd6df;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+
+.viewer-scroll-rail:focus-visible {
+  outline: 3px solid rgba(40, 120, 240, 0.24);
+  outline-offset: -3px;
+}
+
+.viewer-scroll-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 0;
+  min-height: 48px;
+  background: #8995a5;
+  border: 2px solid #e1e6ec;
+  border-radius: 8px;
+  cursor: grab;
+}
+
+.viewer-scroll-thumb:hover {
+  background: #68768a;
+}
+
+.viewer-scroll-thumb.dragging {
+  background: var(--blue);
+  cursor: grabbing;
 }
 
 .viewer-empty {
