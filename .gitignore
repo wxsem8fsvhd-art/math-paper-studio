@@ -1,7 +1,10 @@
 .next/
 dist/
 node_modules/
+.wrangler-config/
 test-loaded.png
 test-workbench.png
 test-export.pdf
 test-ui.cjs
+.vinext/
+.wrangler/
