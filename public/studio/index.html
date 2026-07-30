@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=13" />
+    <link rel="stylesheet" href="./styles.css?v=14" />
   </head>
   <body>
     <header class="topbar">
@@ -65,15 +65,30 @@
           multiple
         />
 
-        <label class="upload-zone" id="uploadZone" for="fileInput" role="button" tabindex="0">
-          <span class="upload-icon">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 16V4m0 0 4 4m-4-4-4 4M4 15v5h16v-5" />
-            </svg>
-          </span>
-          <strong>上传 PDF 试卷</strong>
-          <small>支持多个文件 · 不上传试卷</small>
-        </label>
+        <section class="upload-section">
+          <button
+            class="upload-section-toggle"
+            id="uploadSectionToggle"
+            type="button"
+            aria-expanded="true"
+            aria-controls="uploadSectionBody"
+          >
+            <span>上传文件</span>
+            <small id="uploadSectionHint">上传后自动收起</small>
+            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+          <div id="uploadSectionBody">
+            <label class="upload-zone" id="uploadZone" for="fileInput" role="button" tabindex="0">
+              <span class="upload-icon">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 16V4m0 0 4 4m-4-4-4 4M4 15v5h16v-5" />
+                </svg>
+              </span>
+              <strong>上传 PDF 试卷</strong>
+              <small>支持多个文件 · 不上传试卷</small>
+            </label>
+          </div>
+        </section>
 
         <div class="document-list" id="documentList">
           <div class="empty-note">
@@ -82,6 +97,8 @@
           </div>
         </div>
       </aside>
+
+      <div class="pane-splitter" data-pane-splitter="source" role="separator" aria-label="调整素材栏宽度"></div>
 
       <section class="crop-panel panel">
         <div class="panel-heading crop-heading">
@@ -151,13 +168,11 @@
             >选择 PDF</label>
           </div>
           <div class="canvas-wrap" id="canvasWrap" hidden>
-            <canvas id="pdfCanvas"></canvas>
-            <div class="selection-layer" id="selectionLayer" aria-label="题目框选区域">
-              <div class="selection-box" id="selectionBox" hidden>
-                <span class="selection-size" id="selectionSize"></span>
-                <i class="handle nw"></i><i class="handle ne"></i>
-                <i class="handle sw"></i><i class="handle se"></i>
-              </div>
+            <div class="continuous-pages" id="continuousPages"></div>
+            <div class="selection-box" id="selectionBox" hidden>
+              <span class="selection-size" id="selectionSize"></span>
+              <i class="handle nw"></i><i class="handle ne"></i>
+              <i class="handle sw"></i><i class="handle se"></i>
             </div>
           </div>
         </div>
@@ -193,27 +208,36 @@
         </div>
       </section>
 
+      <div class="pane-splitter" data-pane-splitter="compose" role="separator" aria-label="调整练习题单栏宽度"></div>
+
       <aside class="compose-panel panel">
         <div class="panel-heading">
           <div>
             <span class="eyebrow">03 · 编排</span>
             <h2>练习题单 <span class="count-badge" id="questionCount">0</span></h2>
           </div>
-          <button
-            class="icon-button"
-            id="previewButton"
-            type="button"
-            title="预览排版"
-            aria-label="预览排版"
-            disabled
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
-              <circle cx="12" cy="12" r="2.5" />
-            </svg>
-          </button>
+          <div class="compose-heading-actions">
+            <div class="compose-view-tabs" role="tablist" aria-label="右侧视图">
+              <button class="active" type="button" data-compose-view="editor" role="tab" aria-selected="true">题目</button>
+              <button type="button" data-compose-view="preview" role="tab" aria-selected="false">页面</button>
+            </div>
+            <button
+              class="icon-button"
+              id="previewButton"
+              type="button"
+              title="全屏预览"
+              aria-label="全屏预览"
+              disabled
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                <circle cx="12" cy="12" r="2.5" />
+              </svg>
+            </button>
+          </div>
         </div>
 
+        <div class="compose-view compose-editor-view" id="composeEditorView">
         <section class="day-manager">
           <button
             class="day-manager-toggle"
@@ -320,6 +344,21 @@
             </label>
           </div>
         </div>
+        </div>
+
+        <div class="compose-view compose-preview-view" id="composePreviewView" hidden>
+          <div class="inline-preview-toolbar">
+            <span id="inlinePreviewSummary">加入题目后可在这里预览</span>
+            <button id="refreshInlinePreviewButton" type="button">刷新</button>
+          </div>
+          <div class="inline-preview-pages" id="inlinePreviewPages">
+            <div class="question-empty">
+              <span>○</span>
+              <strong>页面预览会显示在这里</strong>
+              <p>框选题目后即可在主界面直接查看排版。</p>
+            </div>
+          </div>
+        </div>
       </aside>
     </main>
 
@@ -355,6 +394,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=13"></script>
+    <script type="module" src="./app.js?v=14"></script>
   </body>
 </html>

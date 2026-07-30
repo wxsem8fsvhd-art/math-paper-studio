@@ -9,8 +9,13 @@ const elements = {
   fileInput: $("#fileInput"),
   addFilesButton: $("#addFilesButton"),
   uploadZone: $("#uploadZone"),
+  uploadSectionToggle: $("#uploadSectionToggle"),
+  uploadSectionBody: $("#uploadSectionBody"),
+  uploadSectionHint: $("#uploadSectionHint"),
   emptyUploadButton: $("#emptyUploadButton"),
   documentList: $("#documentList"),
+  workspace: $(".workspace"),
+  paneSplitters: $$("[data-pane-splitter]"),
   pageTitle: $("#pageTitle"),
   pageCounter: $("#pageCounter"),
   prevPageButton: $("#prevPageButton"),
@@ -20,8 +25,7 @@ const elements = {
   viewerScrollRail: $("#viewerScrollRail"),
   viewerScrollThumb: $("#viewerScrollThumb"),
   canvasWrap: $("#canvasWrap"),
-  pdfCanvas: $("#pdfCanvas"),
-  selectionLayer: $("#selectionLayer"),
+  continuousPages: $("#continuousPages"),
   selectionBox: $("#selectionBox"),
   selectionSize: $("#selectionSize"),
   selectionAction: $("#selectionAction"),
@@ -42,6 +46,12 @@ const elements = {
   activeDayInput: $("#activeDayInput"),
   dayTabList: $("#dayTabList"),
   addDayButton: $("#addDayButton"),
+  composeEditorView: $("#composeEditorView"),
+  composePreviewView: $("#composePreviewView"),
+  composeViewTabs: $$("[data-compose-view]"),
+  inlinePreviewPages: $("#inlinePreviewPages"),
+  inlinePreviewSummary: $("#inlinePreviewSummary"),
+  refreshInlinePreviewButton: $("#refreshInlinePreviewButton"),
   previewButton: $("#previewButton"),
   exportButton: $("#exportButton"),
   clearAllButton: $("#clearAllButton"),
@@ -80,6 +90,10 @@ const state = {
   activeDay: 1,
   collapsedDays: new Set(),
   showPreviewRuler: false,
+  composeView: "editor",
+  inlinePreviewDirty: true,
+  inlinePreviewToken: 0,
+  paneDrag: null,
 };
 
 const thumbnailState = {
@@ -90,6 +104,17 @@ const thumbnailState = {
 };
 
 const MAX_THUMBNAIL_WORKERS = 2;
+
+const continuousState = {
+  observer: null,
+  queue: [],
+  active: 0,
+  generation: 0,
+  renderedPages: new Set(),
+  baseAspectRatio: 210 / 297,
+};
+
+const MAX_CONTINUOUS_WORKERS = 2;
 
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -104,6 +129,13 @@ function toast(message, type = "success") {
 function setSaveStatus(text, busy = false) {
   elements.saveStatus.lastChild.textContent = ` ${text}`;
   elements.saveStatus.querySelector("i").style.background = busy ? "#f0b857" : "#54c88a";
+}
+
+function setUploadSectionCollapsed(collapsed) {
+  const expanded = !collapsed;
+  elements.uploadSectionToggle.setAttribute("aria-expanded", String(expanded));
+  elements.uploadSectionBody.hidden = collapsed;
+  elements.uploadSectionHint.textContent = collapsed ? "点击展开" : "上传后自动收起";
 }
 
 function getActiveDocument() {
@@ -197,6 +229,7 @@ async function handleFiles(files) {
 
   renderDocumentList();
   await renderActivePage();
+  if (state.documents.length) setUploadSectionCollapsed(true);
   setSaveStatus("仅在本机处理");
   if (pdfFiles.length > 1) toast(`已加入 ${pdfFiles.length} 份试卷。`);
 }
@@ -327,10 +360,23 @@ async function renderThumbnail({ documentId, surface, generation }) {
   }
 }
 
+function continuousPlaceholder(pageNumber) {
+  return `<div class="continuous-page-placeholder">第 ${pageNumber} 页<br />滚动到这里时加载</div>`;
+}
+
+function resetContinuousViewer() {
+  continuousState.observer?.disconnect();
+  continuousState.generation += 1;
+  continuousState.queue = [];
+  continuousState.renderedPages.clear();
+  elements.continuousPages.innerHTML = "";
+}
+
 async function renderActivePage() {
   const document = getActiveDocument();
   const token = ++state.renderToken;
   clearSelection();
+  resetContinuousViewer();
 
   if (!document) {
     elements.viewerEmpty.hidden = false;
@@ -347,39 +393,264 @@ async function renderActivePage() {
   elements.canvasWrap.hidden = false;
   elements.pageTitle.textContent = document.name;
   elements.pageCounter.textContent = `${state.activePage} / ${document.pages}`;
-  elements.toolHint.textContent = "按住鼠标拖动，框出一道完整题目";
+  elements.toolHint.textContent = "向下连续滚动浏览；在任意页面拖动框选题目";
   updatePageControls();
 
   try {
-    const page = await document.pdf.getPage(state.activePage);
+    const firstPage = await document.pdf.getPage(1);
     if (token !== state.renderToken) return;
-    const baseViewport = page.getViewport({ scale: 1 });
-    const availableWidth = Math.max(420, elements.viewerStage.clientWidth - 56);
-    const fitScale = availableWidth / baseViewport.width;
-    const viewport = page.getViewport({ scale: fitScale * state.zoom });
-    const canvas = elements.pdfCanvas;
-    const context = canvas.getContext("2d", { alpha: false });
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const baseViewport = firstPage.getViewport({ scale: 1 });
+    continuousState.baseAspectRatio = baseViewport.width / baseViewport.height;
+    const availableWidth = Math.max(420, elements.viewerStage.clientWidth - 62);
+    const displayWidth = Math.ceil(availableWidth * state.zoom);
+    const generation = continuousState.generation;
 
+    const fragment = window.document.createDocumentFragment();
+    for (let pageNumber = 1; pageNumber <= document.pages; pageNumber += 1) {
+      const shell = window.document.createElement("section");
+      shell.className = "continuous-page";
+      shell.dataset.continuousPage = String(pageNumber);
+      shell.style.width = `${displayWidth}px`;
+      shell.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
+      shell.innerHTML = continuousPlaceholder(pageNumber);
+      fragment.append(shell);
+    }
+    elements.continuousPages.append(fragment);
+
+    continuousState.observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const shell = entry.target;
+          shell.dataset.inViewport = String(entry.isIntersecting);
+          if (entry.isIntersecting) {
+            queueContinuousPage(document.id, shell, generation);
+          }
+        });
+      },
+      {
+        root: elements.viewerStage,
+        rootMargin: "1300px 0px",
+      },
+    );
+
+    elements.continuousPages.querySelectorAll("[data-continuous-page]").forEach((shell) => {
+      continuousState.observer.observe(shell);
+    });
+
+    const activeShell = elements.continuousPages.querySelector(
+      `[data-continuous-page="${state.activePage}"]`,
+    );
+    if (activeShell) {
+      elements.viewerStage.scrollTop = Math.max(0, activeShell.offsetTop - 20);
+      queueContinuousPage(document.id, activeShell, generation);
+    }
+    firstPage.cleanup();
+    requestAnimationFrame(() => {
+      updateActivePageFromScroll();
+      updateViewerScrollRail();
+    });
+  } catch (error) {
+    console.error(error);
+    toast("试卷连续预览生成失败，请重新打开文件。", "error");
+  }
+}
+
+function queueContinuousPage(documentId, shell, generation) {
+  if (
+    generation !== continuousState.generation ||
+    shell.dataset.rendered === "true" ||
+    shell.dataset.queued === "true"
+  ) {
+    return;
+  }
+  shell.dataset.queued = "true";
+  continuousState.queue.push({ documentId, shell, generation });
+  drainContinuousQueue();
+}
+
+function drainContinuousQueue() {
+  while (
+    continuousState.active < MAX_CONTINUOUS_WORKERS &&
+    continuousState.queue.length
+  ) {
+    const task = continuousState.queue.shift();
+    continuousState.active += 1;
+    renderContinuousPage(task).finally(() => {
+      continuousState.active -= 1;
+      drainContinuousQueue();
+    });
+  }
+}
+
+async function renderContinuousPage({ documentId, shell, generation }) {
+  if (generation !== continuousState.generation || !shell.isConnected) return;
+  const document = state.documents.find((item) => item.id === documentId);
+  if (!document) return;
+  const pageNumber = Number(shell.dataset.continuousPage);
+
+  try {
+    const page = await document.pdf.getPage(pageNumber);
+    if (generation !== continuousState.generation || !shell.isConnected) return;
+    const baseViewport = page.getViewport({ scale: 1 });
+    const cssWidth = Number.parseFloat(shell.style.width);
+    const viewport = page.getViewport({ scale: cssWidth / baseViewport.width });
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const canvas = window.document.createElement("canvas");
+    canvas.className = "pdf-page-canvas";
     canvas.width = Math.ceil(viewport.width * ratio);
     canvas.height = Math.ceil(viewport.height * ratio);
     canvas.style.width = `${Math.ceil(viewport.width)}px`;
     canvas.style.height = `${Math.ceil(viewport.height)}px`;
+    const context = canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
 
     await page.render({
       canvasContext: context,
       viewport,
       transform: ratio === 1 ? null : [ratio, 0, 0, ratio, 0, 0],
     }).promise;
-    if (token !== state.renderToken) return;
+    if (generation !== continuousState.generation || !shell.isConnected) return;
 
-    elements.selectionLayer.style.width = canvas.style.width;
-    elements.selectionLayer.style.height = canvas.style.height;
+    const layer = window.document.createElement("div");
+    layer.className = "selection-layer";
+    layer.dataset.selectionPage = String(pageNumber);
+    layer.setAttribute("aria-label", `第 ${pageNumber} 页题目框选区域`);
+    shell.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
+    shell.replaceChildren(canvas, layer);
+    shell.dataset.rendered = "true";
+    shell.dataset.queued = "false";
+    continuousState.renderedPages.add(pageNumber);
+    page.cleanup();
     requestAnimationFrame(updateViewerScrollRail);
   } catch (error) {
-    console.error(error);
-    toast("这一页暂时无法显示，请换一页重试。", "error");
+    console.warn(`Page ${pageNumber} render failed`, error);
+    shell.dataset.queued = "false";
+    shell.innerHTML = `<div class="continuous-page-placeholder">第 ${pageNumber} 页暂时无法显示</div>`;
   }
+}
+
+function cleanupContinuousPages() {
+  const protectedPage = state.pointer?.page || state.selection?.page;
+  elements.continuousPages.querySelectorAll('[data-rendered="true"]').forEach((shell) => {
+    const pageNumber = Number(shell.dataset.continuousPage);
+    if (
+      pageNumber === protectedPage ||
+      shell.dataset.inViewport === "true" ||
+      Math.abs(pageNumber - state.activePage) <= 4
+    ) {
+      return;
+    }
+    shell.dataset.rendered = "false";
+    shell.dataset.queued = "false";
+    shell.innerHTML = continuousPlaceholder(pageNumber);
+    continuousState.renderedPages.delete(pageNumber);
+  });
+}
+
+function updateActivePageFromScroll() {
+  const document = getActiveDocument();
+  if (!document) return;
+  const stageRect = elements.viewerStage.getBoundingClientRect();
+  const targetY = stageRect.top + Math.min(110, stageRect.height * 0.24);
+  let closestShell = null;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  elements.continuousPages.querySelectorAll("[data-continuous-page]").forEach((shell) => {
+    const rect = shell.getBoundingClientRect();
+    const distance =
+      rect.top <= targetY && rect.bottom >= targetY
+        ? 0
+        : Math.min(Math.abs(rect.top - targetY), Math.abs(rect.bottom - targetY));
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestShell = shell;
+    }
+  });
+
+  if (!closestShell) return;
+  const pageNumber = Number(closestShell.dataset.continuousPage);
+  if (pageNumber !== state.activePage) {
+    state.activePage = pageNumber;
+    elements.pageCounter.textContent = `${pageNumber} / ${document.pages}`;
+    updatePageControls();
+    updateActiveThumbnail(false);
+  }
+  cleanupContinuousPages();
+}
+
+function scrollToPage(pageNumber, behavior = "smooth") {
+  const document = getActiveDocument();
+  if (!document) return;
+  const targetPage = Math.min(document.pages, Math.max(1, pageNumber));
+  const shell = elements.continuousPages.querySelector(
+    `[data-continuous-page="${targetPage}"]`,
+  );
+  if (!shell) return;
+  state.activePage = targetPage;
+  elements.pageCounter.textContent = `${targetPage} / ${document.pages}`;
+  updatePageControls();
+  updateActiveThumbnail(true);
+  elements.viewerStage.scrollTo({
+    top: Math.max(0, shell.offsetTop - 20),
+    behavior,
+  });
+  queueContinuousPage(document.id, shell, continuousState.generation);
+}
+
+function setupPaneResizing() {
+  elements.paneSplitters.forEach((splitter) => {
+    const finish = (event) => {
+      if (!state.paneDrag || state.paneDrag.pointerId !== event.pointerId) return;
+      splitter.classList.remove("dragging");
+      document.body.classList.remove("resizing-panes");
+      state.paneDrag = null;
+      if (getActiveDocument()) renderActivePage();
+    };
+
+    splitter.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      splitter.setPointerCapture(event.pointerId);
+      const styles = getComputedStyle(elements.workspace);
+      state.paneDrag = {
+        type: splitter.dataset.paneSplitter,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        sourceWidth: Number.parseFloat(styles.getPropertyValue("--source-pane-width")) || 258,
+        composeWidth: Number.parseFloat(styles.getPropertyValue("--compose-pane-width")) || 332,
+      };
+      splitter.classList.add("dragging");
+      document.body.classList.add("resizing-panes");
+    });
+
+    splitter.addEventListener("pointermove", (event) => {
+      const drag = state.paneDrag;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const workspaceWidth = elements.workspace.clientWidth;
+      const delta = event.clientX - drag.startX;
+      if (drag.type === "source") {
+        const maximum = Math.max(240, workspaceWidth - drag.composeWidth - 470);
+        const width = Math.min(maximum, Math.max(180, drag.sourceWidth + delta));
+        elements.workspace.style.setProperty("--source-pane-width", `${Math.round(width)}px`);
+      } else {
+        const maximum = Math.max(360, workspaceWidth - drag.sourceWidth - 470);
+        const width = Math.min(maximum, Math.max(280, drag.composeWidth - delta));
+        elements.workspace.style.setProperty("--compose-pane-width", `${Math.round(width)}px`);
+      }
+      updateViewerScrollRail();
+    });
+
+    splitter.addEventListener("pointerup", finish);
+    splitter.addEventListener("pointercancel", finish);
+    splitter.addEventListener("dblclick", () => {
+      const property =
+        splitter.dataset.paneSplitter === "source"
+          ? "--source-pane-width"
+          : "--compose-pane-width";
+      elements.workspace.style.removeProperty(property);
+      if (getActiveDocument()) renderActivePage();
+    });
+  });
 }
 
 function updatePageControls() {
@@ -462,8 +733,9 @@ function clearSelection() {
   elements.selectionAction.hidden = true;
 }
 
-function pointFromEvent(event) {
-  const rect = elements.selectionLayer.getBoundingClientRect();
+function pointFromEvent(event, layer = state.pointer?.layer) {
+  if (!layer) return { x: 0, y: 0 };
+  const rect = layer.getBoundingClientRect();
   return {
     x: Math.max(0, Math.min(event.clientX - rect.left, rect.width)),
     y: Math.max(0, Math.min(event.clientY - rect.top, rect.height)),
@@ -490,12 +762,22 @@ function updateSelectionBox(rect) {
   elements.selectionSize.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
 }
 
-async function finalizeSelection(rect) {
+async function finalizeSelection(rect, pointerContext) {
   if (rect.width < 35 || rect.height < 25) {
     clearSelection();
     return;
   }
-  state.selection = rect;
+  state.selection = {
+    ...rect,
+    page: pointerContext.page,
+    canvas: pointerContext.canvas,
+    layer: pointerContext.layer,
+  };
+  state.activePage = pointerContext.page;
+  const document = getActiveDocument();
+  if (document) elements.pageCounter.textContent = `${state.activePage} / ${document.pages}`;
+  updatePageControls();
+  updateActiveThumbnail(false);
   const ratio = rect.width / rect.height;
   elements.selectionMeta.textContent =
     ratio > 2.8 ? "横向题目 · 建议使用整栏宽度" : "拖动空白处可重新框选";
@@ -504,17 +786,18 @@ async function finalizeSelection(rect) {
 
 async function addSelectedQuestion() {
   const document = getActiveDocument();
-  const rect = state.selection;
-  if (!document || !rect) return;
-
-  const displayWidth = elements.pdfCanvas.clientWidth;
-  const displayHeight = elements.pdfCanvas.clientHeight;
-  const sourceScaleX = elements.pdfCanvas.width / displayWidth;
-  const sourceScaleY = elements.pdfCanvas.height / displayHeight;
+  const selection = state.selection;
+  if (!document || !selection?.canvas) return;
+  const rect = selection;
+  const canvas = selection.canvas;
+  const displayWidth = canvas.clientWidth;
+  const displayHeight = canvas.clientHeight;
+  const sourceScaleX = canvas.width / displayWidth;
+  const sourceScaleY = canvas.height / displayHeight;
   const sx = Math.max(0, Math.round(rect.x * sourceScaleX));
   const sy = Math.max(0, Math.round(rect.y * sourceScaleY));
-  const sw = Math.min(elements.pdfCanvas.width - sx, Math.round(rect.width * sourceScaleX));
-  const sh = Math.min(elements.pdfCanvas.height - sy, Math.round(rect.height * sourceScaleY));
+  const sw = Math.min(canvas.width - sx, Math.round(rect.width * sourceScaleX));
+  const sh = Math.min(canvas.height - sy, Math.round(rect.height * sourceScaleY));
 
   const cropCanvas = window.document.createElement("canvas");
   const maxDimension = 2200;
@@ -525,7 +808,7 @@ async function addSelectedQuestion() {
   cropContext.fillStyle = "#ffffff";
   cropContext.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
   cropContext.drawImage(
-    elements.pdfCanvas,
+    canvas,
     sx,
     sy,
     sw,
@@ -543,7 +826,7 @@ async function addSelectedQuestion() {
     width: cropCanvas.width,
     height: cropCanvas.height,
     sourceName: document.name,
-    sourcePage: state.activePage,
+    sourcePage: selection.page,
     size: "standard",
     answerSpaceMm: 0,
     day: state.activeDay,
@@ -650,6 +933,7 @@ function renderQuestions() {
         <strong>框选的题目会出现在这里</strong>
         <p>先在上方选择第几天，再从试卷中框选题目。</p>
       </div>`;
+    markInlinePreviewDirty();
     return;
   }
 
@@ -686,6 +970,7 @@ function renderQuestions() {
     .join("");
 
   bindQuestionDragging();
+  markInlinePreviewDirty();
 }
 
 function moveQuestion(id, direction) {
@@ -1081,6 +1366,70 @@ function drawAnswerArea(context, x, y, width, height, pxPerMm, label) {
   context.restore();
 }
 
+let inlinePreviewTimer = null;
+
+function markInlinePreviewDirty() {
+  state.inlinePreviewDirty = true;
+  if (state.composeView !== "preview") return;
+  window.clearTimeout(inlinePreviewTimer);
+  inlinePreviewTimer = window.setTimeout(renderInlinePreview, 180);
+}
+
+async function renderInlinePreview() {
+  const token = ++state.inlinePreviewToken;
+  window.clearTimeout(inlinePreviewTimer);
+
+  if (!state.questions.length) {
+    elements.inlinePreviewSummary.textContent = "加入题目后可在这里预览";
+    elements.inlinePreviewPages.innerHTML = `
+      <div class="question-empty">
+        <span>○</span>
+        <strong>页面预览会显示在这里</strong>
+        <p>框选题目后即可在主界面直接查看排版。</p>
+      </div>`;
+    state.inlinePreviewDirty = false;
+    return;
+  }
+
+  elements.inlinePreviewSummary.textContent = "正在更新页面预览…";
+  elements.inlinePreviewPages.innerHTML = `<div class="empty-note">正在排版…</div>`;
+
+  try {
+    const canvases = await buildPaperCanvases(0.72);
+    if (token !== state.inlinePreviewToken) return;
+    const config = getLayoutConfig();
+    elements.inlinePreviewPages.innerHTML = "";
+    canvases.forEach((canvas) => {
+      const page = window.document.createElement("div");
+      page.className = "inline-preview-page";
+      page.style.aspectRatio = `${config.widthMm} / ${config.heightMm}`;
+      page.append(canvas);
+      elements.inlinePreviewPages.append(page);
+    });
+    elements.inlinePreviewSummary.textContent =
+      `${state.questions.length} 道题 · ${canvases.length} 页`;
+    state.inlinePreviewDirty = false;
+  } catch (error) {
+    console.error(error);
+    elements.inlinePreviewSummary.textContent = "页面预览生成失败";
+    elements.inlinePreviewPages.innerHTML =
+      `<div class="empty-note">请点击“刷新”重新生成。</div>`;
+  }
+}
+
+function setComposeView(view) {
+  state.composeView = view === "preview" ? "preview" : "editor";
+  const showingPreview = state.composeView === "preview";
+  elements.composeEditorView.hidden = showingPreview;
+  elements.composePreviewView.hidden = !showingPreview;
+  elements.composeViewTabs.forEach((button) => {
+    const active = button.dataset.composeView === state.composeView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  if (showingPreview && state.inlinePreviewDirty) renderInlinePreview();
+}
+
 async function openPreview() {
   if (!state.questions.length) {
     toast("请先框选至少一道题。", "error");
@@ -1209,6 +1558,7 @@ function removeDocument(id) {
   }
   renderDocumentList();
   renderActivePage();
+  if (!state.documents.length) setUploadSectionCollapsed(false);
   if (document) toast(`已移除「${document.name}」。`);
 }
 
@@ -1233,6 +1583,7 @@ function clearAll() {
   renderDocumentList();
   renderQuestions();
   renderActivePage();
+  setUploadSectionCollapsed(false);
   toast("工作台已清空。");
 }
 
@@ -1242,6 +1593,10 @@ function clearAll() {
     event.preventDefault();
     elements.fileInput.click();
   });
+});
+elements.uploadSectionToggle.addEventListener("click", () => {
+  const expanded = elements.uploadSectionToggle.getAttribute("aria-expanded") === "true";
+  setUploadSectionCollapsed(expanded);
 });
 elements.fileInput.addEventListener("change", (event) => {
   handleFiles(event.target.files);
@@ -1273,10 +1628,7 @@ elements.documentList.addEventListener("click", async (event) => {
 
   const page = event.target.closest("[data-page]");
   if (page) {
-    state.activePage = Number(page.dataset.page);
-    updateActiveThumbnail(true);
-    elements.viewerStage.scrollTo({ top: 0, left: 0 });
-    await renderActivePage();
+    scrollToPage(Number(page.dataset.page));
     return;
   }
 
@@ -1291,18 +1643,12 @@ elements.documentList.addEventListener("click", async (event) => {
 
 elements.prevPageButton.addEventListener("click", async () => {
   if (state.activePage <= 1) return;
-  state.activePage -= 1;
-  updateActiveThumbnail(true);
-  elements.viewerStage.scrollTo({ top: 0, left: 0 });
-  await renderActivePage();
+  scrollToPage(state.activePage - 1);
 });
 elements.nextPageButton.addEventListener("click", async () => {
   const document = getActiveDocument();
   if (!document || state.activePage >= document.pages) return;
-  state.activePage += 1;
-  updateActiveThumbnail(true);
-  elements.viewerStage.scrollTo({ top: 0, left: 0 });
-  await renderActivePage();
+  scrollToPage(state.activePage + 1);
 });
 
 elements.scrollUpButton.addEventListener("click", () => {
@@ -1320,34 +1666,54 @@ elements.zoomInButton.addEventListener("click", async () => {
   await renderActivePage();
 });
 
-elements.selectionLayer.addEventListener("pointerdown", (event) => {
+elements.continuousPages.addEventListener("pointerdown", (event) => {
+  const layer = event.target.closest(".selection-layer");
+  if (!layer) return;
   if (event.button !== 0) return;
   event.preventDefault();
-  elements.selectionLayer.setPointerCapture(event.pointerId);
-  const start = pointFromEvent(event);
-  state.pointer = { start, current: start };
+  layer.setPointerCapture(event.pointerId);
+  const shell = layer.closest("[data-continuous-page]");
+  const canvas = shell?.querySelector("canvas");
+  if (!shell || !canvas) return;
+  const start = pointFromEvent(event, layer);
+  state.pointer = {
+    start,
+    current: start,
+    layer,
+    canvas,
+    page: Number(shell.dataset.continuousPage),
+  };
   state.selection = null;
   elements.selectionAction.hidden = true;
+  layer.append(elements.selectionBox);
   updateSelectionBox({ x: start.x, y: start.y, width: 0, height: 0 });
 });
 
-elements.selectionLayer.addEventListener("pointermove", (event) => {
+elements.continuousPages.addEventListener("pointermove", (event) => {
   if (!state.pointer) return;
   autoScrollViewer(event);
   state.pointer.current = pointFromEvent(event);
   updateSelectionBox(normalizeRect(state.pointer.start, state.pointer.current));
 });
 
-elements.selectionLayer.addEventListener("pointerup", async (event) => {
+elements.continuousPages.addEventListener("pointerup", async (event) => {
   if (!state.pointer) return;
+  const pointerContext = state.pointer;
   const end = pointFromEvent(event);
   const rect = normalizeRect(state.pointer.start, end);
   state.pointer = null;
-  await finalizeSelection(rect);
+  await finalizeSelection(rect, pointerContext);
 });
 
-elements.selectionLayer.addEventListener("pointercancel", clearSelection);
-elements.viewerStage.addEventListener("scroll", updateViewerScrollRail, { passive: true });
+elements.continuousPages.addEventListener("pointercancel", clearSelection);
+elements.viewerStage.addEventListener(
+  "scroll",
+  () => {
+    updateViewerScrollRail();
+    updateActivePageFromScroll();
+  },
+  { passive: true },
+);
 elements.viewerStage.addEventListener(
   "wheel",
   (event) => {
@@ -1473,7 +1839,10 @@ elements.questionList.addEventListener("change", (event) => {
   const sizeSelect = event.target.closest("[data-question-size]");
   if (!sizeSelect) return;
   const question = state.questions.find((item) => item.id === sizeSelect.dataset.questionSize);
-  if (question) question.size = sizeSelect.value;
+  if (question) {
+    question.size = sizeSelect.value;
+    markInlinePreviewDirty();
+  }
 });
 
 elements.questionList.addEventListener("input", (event) => {
@@ -1483,6 +1852,7 @@ elements.questionList.addEventListener("input", (event) => {
   const value = Number(answerInput.value);
   if (question && Number.isFinite(value) && value >= 0) {
     question.answerSpaceMm = Math.min(2000, Math.round(value));
+    markInlinePreviewDirty();
   }
 });
 
@@ -1526,10 +1896,28 @@ elements.settingsToggle.addEventListener("click", () => {
 
 elements.pageMargin.addEventListener("input", () => {
   elements.marginOutput.textContent = `${elements.pageMargin.value} mm`;
+  markInlinePreviewDirty();
 });
 elements.questionGap.addEventListener("input", () => {
   elements.gapOutput.textContent = `${elements.questionGap.value} mm`;
+  markInlinePreviewDirty();
 });
+
+[
+  elements.paperTitle,
+  elements.paperSize,
+  elements.columns,
+  elements.showNumbers,
+  elements.showSources,
+].forEach((control) => {
+  control.addEventListener("input", markInlinePreviewDirty);
+  control.addEventListener("change", markInlinePreviewDirty);
+});
+
+elements.composeViewTabs.forEach((button) => {
+  button.addEventListener("click", () => setComposeView(button.dataset.composeView));
+});
+elements.refreshInlinePreviewButton.addEventListener("click", renderInlinePreview);
 
 elements.previewButton.addEventListener("click", openPreview);
 elements.previewRulerToggle.addEventListener("click", () => {
@@ -1544,8 +1932,16 @@ elements.clearAllButton.addEventListener("click", clearAll);
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.previewModal.hidden) closePreview();
 });
-window.addEventListener("resize", updateViewerScrollRail);
+let viewerResizeTimer = null;
+window.addEventListener("resize", () => {
+  updateViewerScrollRail();
+  window.clearTimeout(viewerResizeTimer);
+  viewerResizeTimer = window.setTimeout(() => {
+    if (getActiveDocument() && !state.paneDrag) renderActivePage();
+  }, 180);
+});
 
+setupPaneResizing();
 renderQuestions();
 updatePageControls();
 
