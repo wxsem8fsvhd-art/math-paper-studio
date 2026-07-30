@@ -2,15 +2,23 @@
   "name": "math-paper-studio",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "dev": "vinext dev",
+    "build": "vinext build && node scripts/copy-hosting.mjs",
+    "start": "vinext start"
   },
   "dependencies": {
-    "next": "15.5.9",
-    "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "next": "16.2.12",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-server-dom-webpack": "19.2.8",
+    "vinext": "1.0.0-beta.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.4",
+    "@vitejs/plugin-rsc": "^0.5.32",
+    "vite": "^8.1.5"
   }
 }
