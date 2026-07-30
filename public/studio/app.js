@@ -504,6 +504,7 @@ async function addSelectedQuestion() {
     sourcePage: state.activePage,
     size: "standard",
     answerSpace: "none",
+    customAnswerSpaceMm: 100,
   });
 
   clearSelection();
@@ -562,10 +563,24 @@ function renderQuestions() {
                 <span>答题区</span>
                 <select data-answer-space="${question.id}">
                   <option value="none" ${(question.answerSpace || "none") === "none" ? "selected" : ""}>不留</option>
-                  <option value="small" ${question.answerSpace === "small" ? "selected" : ""}>小 · 20 mm</option>
-                  <option value="medium" ${question.answerSpace === "medium" ? "selected" : ""}>中 · 35 mm</option>
-                  <option value="large" ${question.answerSpace === "large" ? "selected" : ""}>大 · 50 mm</option>
+                  <option value="small" ${question.answerSpace === "small" ? "selected" : ""}>小 · 30 mm</option>
+                  <option value="medium" ${question.answerSpace === "medium" ? "selected" : ""}>中 · 50 mm</option>
+                  <option value="large" ${question.answerSpace === "large" ? "selected" : ""}>大 · 80 mm</option>
+                  <option value="custom" ${question.answerSpace === "custom" ? "selected" : ""}>自定义</option>
                 </select>
+                <span class="custom-answer-space" ${question.answerSpace === "custom" ? "" : "hidden"}>
+                  <input
+                    type="number"
+                    min="1"
+                    max="500"
+                    step="1"
+                    inputmode="numeric"
+                    value="${question.customAnswerSpaceMm || 100}"
+                    data-custom-answer-space="${question.id}"
+                    aria-label="自定义答题区高度"
+                  />
+                  <span>mm</span>
+                </span>
               </label>
             </div>
           </div>
@@ -698,24 +713,34 @@ async function buildPaperCanvases(scale = 2) {
     let imageWidth = availableWidth - numberWidth;
     let imageHeight = imageWidth * (image.height / image.width);
     const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
-    const answerSpaceMm = {
+    const presetAnswerSpaceMm = {
       none: 0,
-      small: 20,
-      medium: 35,
-      large: 50,
-    }[question.answerSpace || "none"];
+      small: 30,
+      medium: 50,
+      large: 80,
+    };
+    const answerSpaceMm =
+      question.answerSpace === "custom"
+        ? Math.min(500, Math.max(1, Number(question.customAnswerSpaceMm) || 100))
+        : presetAnswerSpaceMm[question.answerSpace || "none"];
     const answerHeight = answerSpaceMm * pxPerMm;
     const answerGap = answerHeight > 0 ? 4 * pxPerMm : 0;
+    const maximumFirstAnswerHeight = Math.max(
+      0,
+      bottomLimit - contentTop - sourceHeight - answerGap - gap - 12 * pxPerMm,
+    );
+    const firstAnswerHeight = Math.min(answerHeight, maximumFirstAnswerHeight);
+    let remainingAnswerHeight = answerHeight - firstAnswerHeight;
     const maxImageHeight = Math.max(
       12 * pxPerMm,
-      bottomLimit - contentTop - sourceHeight - answerGap - answerHeight - gap,
+      bottomLimit - contentTop - sourceHeight - answerGap - firstAnswerHeight - gap,
     );
     if (imageHeight > maxImageHeight) {
       const fit = maxImageHeight / imageHeight;
       imageWidth *= fit;
       imageHeight *= fit;
     }
-    const blockHeight = imageHeight + sourceHeight + answerGap + answerHeight + gap;
+    const blockHeight = imageHeight + sourceHeight + answerGap + firstAnswerHeight + gap;
 
     let columnIndex = positions[0].y <= positions[positions.length - 1].y ? 0 : positions.length - 1;
     if (config.columns === 2 && requiredColumns === 1) {
@@ -736,7 +761,7 @@ async function buildPaperCanvases(scale = 2) {
         imageWidth,
         imageHeight,
         numberWidth,
-        answerHeight,
+        firstAnswerHeight,
         answerGap,
         config,
         pxPerMm,
@@ -765,12 +790,36 @@ async function buildPaperCanvases(scale = 2) {
         imageWidth,
         imageHeight,
         numberWidth,
-        answerHeight,
+        firstAnswerHeight,
         answerGap,
         config,
         pxPerMm,
       );
       positions[columnIndex].y += blockHeight;
+    }
+
+    while (remainingAnswerHeight > 0) {
+      newPage();
+      const maximumContinuationHeight = bottomLimit - contentTop - gap;
+      const continuationHeight = Math.min(remainingAnswerHeight, maximumContinuationHeight);
+      const continuationX = margin + numberWidth;
+      drawAnswerArea(
+        context,
+        continuationX,
+        contentTop,
+        imageWidth,
+        continuationHeight,
+        pxPerMm,
+        `第 ${index + 1} 题答题区（续）`,
+      );
+      const continuationBottom = contentTop + continuationHeight + gap;
+      if (requiredColumns === 2) {
+        positions[0].y = continuationBottom;
+        positions[1].y = continuationBottom;
+      } else {
+        positions[0].y = continuationBottom;
+      }
+      remainingAnswerHeight -= continuationHeight;
     }
   }
 
@@ -827,27 +876,18 @@ function drawQuestion(
   if (answerHeight > 0) {
     const answerX = x + numberWidth;
     const answerY = y + imageHeight + (config.showSources ? 5 * pxPerMm : 0) + answerGap;
-    const answerWidth = imageWidth;
-
-    context.save();
-    context.fillStyle = "#8b96a6";
-    context.font = `${Math.round(3 * pxPerMm)}px "Noto Sans SC", "Microsoft YaHei", sans-serif`;
-    context.textAlign = "left";
-    context.textBaseline = "top";
-    context.fillText("答题区", answerX, answerY);
-
-    context.strokeStyle = "#d8dee7";
-    context.lineWidth = Math.max(1, 0.2 * pxPerMm);
-    const firstLineY = answerY + 7 * pxPerMm;
-    const lineGap = 8 * pxPerMm;
-    for (let lineY = firstLineY; lineY <= answerY + answerHeight - 2 * pxPerMm; lineY += lineGap) {
-      context.beginPath();
-      context.moveTo(answerX, lineY);
-      context.lineTo(answerX + answerWidth, lineY);
-      context.stroke();
-    }
-    context.restore();
+    drawAnswerArea(context, answerX, answerY, imageWidth, answerHeight, pxPerMm, "答题区");
   }
+}
+
+function drawAnswerArea(context, x, y, width, height, pxPerMm, label) {
+  context.save();
+  context.fillStyle = "#8b96a6";
+  context.font = `${Math.round(3 * pxPerMm)}px "Noto Sans SC", "Microsoft YaHei", sans-serif`;
+  context.textAlign = "left";
+  context.textBaseline = "top";
+  context.fillText(label, x, y);
+  context.restore();
 }
 
 async function openPreview() {
@@ -1210,7 +1250,23 @@ elements.questionList.addEventListener("change", (event) => {
   const answerSelect = event.target.closest("[data-answer-space]");
   if (!answerSelect) return;
   const question = state.questions.find((item) => item.id === answerSelect.dataset.answerSpace);
-  if (question) question.answerSpace = answerSelect.value;
+  if (!question) return;
+  question.answerSpace = answerSelect.value;
+  const customControl = answerSelect.parentElement.querySelector(".custom-answer-space");
+  customControl.hidden = answerSelect.value !== "custom";
+  if (answerSelect.value === "custom") {
+    customControl.querySelector("input").focus();
+  }
+});
+
+elements.questionList.addEventListener("input", (event) => {
+  const input = event.target.closest("[data-custom-answer-space]");
+  if (!input) return;
+  const question = state.questions.find((item) => item.id === input.dataset.customAnswerSpace);
+  const value = Number(input.value);
+  if (question && Number.isFinite(value) && value > 0) {
+    question.customAnswerSpaceMm = Math.min(500, Math.round(value));
+  }
 });
 
 elements.settingsToggle.addEventListener("click", () => {
