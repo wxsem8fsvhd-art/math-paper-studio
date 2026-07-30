@@ -36,6 +36,12 @@ const elements = {
   zoomLabel: $("#zoomLabel"),
   questionList: $("#questionList"),
   questionCount: $("#questionCount"),
+  dayManagerToggle: $("#dayManagerToggle"),
+  dayManagerBody: $("#dayManagerBody"),
+  activeDayLabel: $("#activeDayLabel"),
+  activeDayInput: $("#activeDayInput"),
+  dayTabList: $("#dayTabList"),
+  addDayButton: $("#addDayButton"),
   previewButton: $("#previewButton"),
   exportButton: $("#exportButton"),
   clearAllButton: $("#clearAllButton"),
@@ -70,6 +76,8 @@ const state = {
   scrollDrag: null,
   previewCanvases: [],
   renderToken: 0,
+  activeDay: 1,
+  collapsedDays: new Set(),
 };
 
 const thumbnailState = {
@@ -106,6 +114,38 @@ function escapeHtml(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function getQuestionDay(question) {
+  return Math.min(365, Math.max(1, Math.round(Number(question.day) || 1)));
+}
+
+function getQuestionAnswerSpaceMm(question) {
+  const directValue = Number(question.answerSpaceMm);
+  if (Number.isFinite(directValue) && directValue >= 0) {
+    return Math.min(2000, Math.round(directValue));
+  }
+
+  if (question.answerSpace === "custom") {
+    return Math.min(2000, Math.max(0, Math.round(Number(question.customAnswerSpaceMm) || 0)));
+  }
+
+  return {
+    none: 0,
+    small: 30,
+    medium: 50,
+    large: 80,
+  }[question.answerSpace || "none"];
+}
+
+function sortQuestionsByDay() {
+  state.questions.sort((a, b) => getQuestionDay(a) - getQuestionDay(b));
+}
+
+function getKnownDays() {
+  return [...new Set([1, state.activeDay, ...state.questions.map(getQuestionDay)])].sort(
+    (a, b) => a - b,
+  );
 }
 
 async function handleFiles(files) {
@@ -503,9 +543,8 @@ async function addSelectedQuestion() {
     sourceName: document.name,
     sourcePage: state.activePage,
     size: "standard",
-    answerSpace: "none",
-    customAnswerSpaceMm: 100,
-    day: state.questions.at(-1)?.day || 1,
+    answerSpaceMm: 0,
+    day: state.activeDay,
   });
 
   clearSelection();
@@ -514,7 +553,90 @@ async function addSelectedQuestion() {
   toast(`第 ${state.questions.length} 题已加入练习。`);
 }
 
+function renderDayManager() {
+  elements.activeDayLabel.textContent = `第 ${state.activeDay} 天`;
+  elements.activeDayInput.value = state.activeDay;
+  elements.dayTabList.innerHTML = getKnownDays()
+    .map(
+      (day) => `
+        <button
+          type="button"
+          class="${day === state.activeDay ? "active" : ""}"
+          data-select-active-day="${day}"
+          aria-pressed="${day === state.activeDay}"
+        >第 ${day} 天</button>`,
+    )
+    .join("");
+}
+
+function renderQuestionCard(question, index) {
+  const answerSpaceMm = getQuestionAnswerSpaceMm(question);
+  const presetListId = `answer-space-presets-${question.id}`;
+  return `
+    <article class="question-card" data-question-id="${question.id}">
+      <span
+        class="drag-handle"
+        draggable="true"
+        data-drag-question="${question.id}"
+        title="拖动排序或拖到其他天"
+      ></span>
+      <div class="question-main">
+        <div class="question-preview">
+          <img src="${question.image}" alt="第 ${index + 1} 题预览" />
+        </div>
+        <div class="question-meta">
+          <span class="question-source" title="${escapeHtml(question.sourceName)}">第 ${index + 1} 题 · ${escapeHtml(question.sourceName)} P${question.sourcePage}</span>
+          <span class="question-actions">
+            <button type="button" data-move-up="${question.id}" title="上移" aria-label="上移">↑</button>
+            <button type="button" data-move-down="${question.id}" title="下移" aria-label="下移">↓</button>
+            <button type="button" data-duplicate="${question.id}" title="复制" aria-label="复制">
+              <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="1"/><path d="M16 8V5H5v11h3"/></svg>
+            </button>
+            <button class="remove" type="button" data-remove-question="${question.id}" title="删除" aria-label="删除">
+              <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
+            </button>
+          </span>
+        </div>
+        <div class="question-options">
+          <label class="question-option">
+            <span>题目宽度</span>
+            <select data-question-size="${question.id}">
+              <option value="compact" ${question.size === "compact" ? "selected" : ""}>紧凑</option>
+              <option value="standard" ${question.size === "standard" ? "selected" : ""}>标准</option>
+              <option value="full" ${question.size === "full" ? "selected" : ""}>通栏</option>
+            </select>
+          </label>
+          <label class="question-option">
+            <span>答题区（0 表示不留）</span>
+            <span class="answer-space-editor">
+              <input
+                type="number"
+                min="0"
+                max="2000"
+                step="1"
+                inputmode="numeric"
+                list="${presetListId}"
+                value="${answerSpaceMm}"
+                data-answer-space-mm="${question.id}"
+                aria-label="答题区高度，单位毫米"
+              />
+              <span>mm</span>
+              <datalist id="${presetListId}">
+                <option value="0" label="不留"></option>
+                <option value="30" label="小"></option>
+                <option value="50" label="中"></option>
+                <option value="80" label="大"></option>
+              </datalist>
+            </span>
+          </label>
+        </div>
+      </div>
+    </article>`;
+}
+
 function renderQuestions() {
+  sortQuestionsByDay();
+  renderDayManager();
   elements.questionCount.textContent = state.questions.length;
   elements.previewButton.disabled = !state.questions.length;
   elements.exportButton.disabled = !state.questions.length;
@@ -524,123 +646,134 @@ function renderQuestions() {
       <div class="question-empty">
         <span>+</span>
         <strong>框选的题目会出现在这里</strong>
-        <p>可以拖动排序，也能单独设置作业天数、题目宽度和答题区。</p>
+        <p>先在上方选择第几天，再从试卷中框选题目。</p>
       </div>`;
     return;
   }
 
-  elements.questionList.innerHTML = state.questions
-    .map(
-      (question, index) => `
-        <article class="question-card" draggable="true" data-question-id="${question.id}">
-          <span class="drag-handle" title="拖动排序"></span>
-          <div class="question-main">
-            <div class="question-preview">
-              <img src="${question.image}" alt="第 ${index + 1} 题预览" />
-            </div>
-            <div class="question-meta">
-              <span class="question-source-line">
-                <span class="question-day-badge" data-question-day-badge="${question.id}">第 ${question.day || 1} 天</span>
-                <span class="question-source" title="${escapeHtml(question.sourceName)}">第 ${index + 1} 题 · ${escapeHtml(question.sourceName)} P${question.sourcePage}</span>
-              </span>
-              <span class="question-actions">
-                <button type="button" data-move-up="${question.id}" title="上移" aria-label="上移">↑</button>
-                <button type="button" data-move-down="${question.id}" title="下移" aria-label="下移">↓</button>
-                <button type="button" data-duplicate="${question.id}" title="复制" aria-label="复制">
-                  <svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="1"/><path d="M16 8V5H5v11h3"/></svg>
-                </button>
-                <button class="remove" type="button" data-remove-question="${question.id}" title="删除" aria-label="删除">
-                  <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg>
-                </button>
-              </span>
-            </div>
-            <div class="question-options">
-              <label class="question-option">
-                <span>题目宽度</span>
-                <select data-question-size="${question.id}">
-                  <option value="compact" ${question.size === "compact" ? "selected" : ""}>紧凑</option>
-                  <option value="standard" ${question.size === "standard" ? "selected" : ""}>标准</option>
-                  <option value="full" ${question.size === "full" ? "selected" : ""}>通栏</option>
-                </select>
-              </label>
-              <label class="question-option">
-                <span>答题区</span>
-                <select data-answer-space="${question.id}">
-                  <option value="none" ${(question.answerSpace || "none") === "none" ? "selected" : ""}>不留</option>
-                  <option value="small" ${question.answerSpace === "small" ? "selected" : ""}>小 · 30 mm</option>
-                  <option value="medium" ${question.answerSpace === "medium" ? "selected" : ""}>中 · 50 mm</option>
-                  <option value="large" ${question.answerSpace === "large" ? "selected" : ""}>大 · 80 mm</option>
-                  <option value="custom" ${question.answerSpace === "custom" ? "selected" : ""}>自定义</option>
-                </select>
-                <span class="custom-answer-space" ${question.answerSpace === "custom" ? "" : "hidden"}>
-                  <input
-                    type="number"
-                    min="1"
-                    max="500"
-                    step="1"
-                    inputmode="numeric"
-                    value="${question.customAnswerSpaceMm || 100}"
-                    data-custom-answer-space="${question.id}"
-                    aria-label="自定义答题区高度"
-                  />
-                  <span>mm</span>
-                </span>
-              </label>
-              <label class="question-option question-day-option">
-                <span>作业安排（与题号独立）</span>
-                <span class="question-day-control">
-                  <span>第</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="365"
-                    step="1"
-                    inputmode="numeric"
-                    value="${question.day || 1}"
-                    data-question-day="${question.id}"
-                    aria-label="作业天数"
-                  />
-                  <span>天</span>
-                </span>
-              </label>
-            </div>
+  const indexById = new Map(state.questions.map((question, index) => [question.id, index]));
+  const days = getKnownDays();
+  elements.questionList.innerHTML = days
+    .map((day) => {
+      const questions = state.questions.filter((question) => getQuestionDay(question) === day);
+      const collapsed = state.collapsedDays.has(day);
+      return `
+        <section class="day-group" data-day-group="${day}">
+          <button
+            class="day-group-heading"
+            type="button"
+            data-toggle-day-group="${day}"
+            aria-expanded="${!collapsed}"
+            title="点击折叠；也可以把题拖到这里"
+          >
+            <span><strong>第 ${day} 天</strong><small>${questions.length} 道题</small></span>
+            <span class="day-drop-hint">拖题到这里</span>
+            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+          <div class="day-group-body" ${collapsed ? "hidden" : ""}>
+            ${
+              questions.length
+                ? questions
+                    .map((question) => renderQuestionCard(question, indexById.get(question.id)))
+                    .join("")
+                : '<div class="day-group-empty">暂无题目，可拖动题目到这里</div>'
+            }
           </div>
-        </article>`,
-    )
+        </section>`;
+    })
     .join("");
 
   bindQuestionDragging();
 }
 
 function moveQuestion(id, direction) {
-  const index = state.questions.findIndex((question) => question.id === id);
-  const target = index + direction;
-  if (index < 0 || target < 0 || target >= state.questions.length) return;
-  [state.questions[index], state.questions[target]] = [state.questions[target], state.questions[index]];
+  const question = state.questions.find((item) => item.id === id);
+  if (!question) return;
+  const day = getQuestionDay(question);
+  const dayIndexes = state.questions
+    .map((item, index) => (getQuestionDay(item) === day ? index : -1))
+    .filter((index) => index >= 0);
+  const localIndex = dayIndexes.indexOf(state.questions.indexOf(question));
+  const targetLocalIndex = localIndex + direction;
+  if (targetLocalIndex < 0 || targetLocalIndex >= dayIndexes.length) return;
+  const from = dayIndexes[localIndex];
+  const target = dayIndexes[targetLocalIndex];
+  [state.questions[from], state.questions[target]] = [state.questions[target], state.questions[from]];
+  renderQuestions();
+}
+
+function moveQuestionToDay(id, day) {
+  const from = state.questions.findIndex((question) => question.id === id);
+  if (from < 0) return;
+  const [question] = state.questions.splice(from, 1);
+  question.day = day;
+  let insertAt = state.questions.length;
+  for (let index = 0; index < state.questions.length; index += 1) {
+    if (getQuestionDay(state.questions[index]) > day) {
+      insertAt = index;
+      break;
+    }
+  }
+  while (insertAt < state.questions.length && getQuestionDay(state.questions[insertAt]) === day) {
+    insertAt += 1;
+  }
+  state.questions.splice(insertAt, 0, question);
+  state.collapsedDays.delete(day);
   renderQuestions();
 }
 
 function bindQuestionDragging() {
   let draggedId = null;
-  $$(".question-card").forEach((card) => {
-    card.addEventListener("dragstart", (event) => {
-      draggedId = card.dataset.questionId;
+  $$(".drag-handle[data-drag-question]").forEach((handle) => {
+    handle.addEventListener("dragstart", (event) => {
+      draggedId = handle.dataset.dragQuestion;
+      const card = handle.closest(".question-card");
       card.classList.add("dragging");
       event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedId);
     });
-    card.addEventListener("dragend", () => {
+    handle.addEventListener("dragend", () => {
+      const card = handle.closest(".question-card");
       card.classList.remove("dragging");
+      $$(".drag-over").forEach((element) => element.classList.remove("drag-over"));
       draggedId = null;
     });
+  });
+
+  $$(".question-card").forEach((card) => {
     card.addEventListener("dragover", (event) => {
       event.preventDefault();
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      card.classList.remove("drag-over");
       const targetId = card.dataset.questionId;
       if (!draggedId || draggedId === targetId) return;
       const from = state.questions.findIndex((question) => question.id === draggedId);
-      const to = state.questions.findIndex((question) => question.id === targetId);
+      if (from < 0) return;
       const [item] = state.questions.splice(from, 1);
+      const targetQuestion = state.questions.find((question) => question.id === targetId);
+      item.day = getQuestionDay(targetQuestion);
+      const to = state.questions.findIndex((question) => question.id === targetId);
       state.questions.splice(to, 0, item);
       renderQuestions();
+    });
+  });
+
+  $$(".day-group-heading").forEach((heading) => {
+    heading.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      heading.classList.add("drag-over");
+    });
+    heading.addEventListener("dragleave", () => heading.classList.remove("drag-over"));
+    heading.addEventListener("drop", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      heading.classList.remove("drag-over");
+      if (!draggedId) return;
+      moveQuestionToDay(draggedId, Number(heading.dataset.toggleDayGroup));
     });
   });
 }
@@ -726,11 +859,8 @@ async function buildPaperCanvases(scale = 2) {
   for (let index = 0; index < state.questions.length; index += 1) {
     const question = state.questions[index];
     const image = images[index];
-    const day = Math.min(365, Math.max(1, Math.round(Number(question.day) || 1)));
-    const previousDay =
-      index > 0
-        ? Math.min(365, Math.max(1, Math.round(Number(state.questions[index - 1].day) || 1)))
-        : null;
+    const day = getQuestionDay(question);
+    const previousDay = index > 0 ? getQuestionDay(state.questions[index - 1]) : null;
     const startsNewDay = index === 0 || day !== previousDay;
     const dayHeaderHeight = startsNewDay ? 10 * pxPerMm : 0;
     const numberWidth = config.showNumbers ? 10 * pxPerMm : 0;
@@ -741,16 +871,7 @@ async function buildPaperCanvases(scale = 2) {
     let imageWidth = availableWidth - numberWidth;
     let imageHeight = imageWidth * (image.height / image.width);
     const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
-    const presetAnswerSpaceMm = {
-      none: 0,
-      small: 30,
-      medium: 50,
-      large: 80,
-    };
-    const answerSpaceMm =
-      question.answerSpace === "custom"
-        ? Math.min(500, Math.max(1, Number(question.customAnswerSpaceMm) || 100))
-        : presetAnswerSpaceMm[question.answerSpace || "none"];
+    const answerSpaceMm = getQuestionAnswerSpaceMm(question);
     const answerHeight = answerSpaceMm * pxPerMm;
     const answerGap = answerHeight > 0 ? 4 * pxPerMm : 0;
     const maximumFirstAnswerHeight = Math.max(
@@ -1069,6 +1190,8 @@ function clearAll() {
   state.questions = [];
   state.activeDocumentId = null;
   state.activePage = 1;
+  state.activeDay = 1;
+  state.collapsedDays.clear();
   clearSelection();
   renderDocumentList();
   renderQuestions();
@@ -1278,6 +1401,18 @@ elements.cancelSelectionButton.addEventListener("click", clearSelection);
 elements.addQuestionButton.addEventListener("click", addSelectedQuestion);
 
 elements.questionList.addEventListener("click", (event) => {
+  const dayToggle = event.target.closest("[data-toggle-day-group]");
+  if (dayToggle) {
+    const day = Number(dayToggle.dataset.toggleDayGroup);
+    if (state.collapsedDays.has(day)) {
+      state.collapsedDays.delete(day);
+    } else {
+      state.collapsedDays.add(day);
+    }
+    renderQuestions();
+    return;
+  }
+
   const up = event.target.closest("[data-move-up]");
   const down = event.target.closest("[data-move-down]");
   const duplicate = event.target.closest("[data-duplicate]");
@@ -1299,48 +1434,51 @@ elements.questionList.addEventListener("click", (event) => {
 
 elements.questionList.addEventListener("change", (event) => {
   const sizeSelect = event.target.closest("[data-question-size]");
-  if (sizeSelect) {
-    const question = state.questions.find((item) => item.id === sizeSelect.dataset.questionSize);
-    if (question) question.size = sizeSelect.value;
-    return;
-  }
-
-  const answerSelect = event.target.closest("[data-answer-space]");
-  if (!answerSelect) return;
-  const question = state.questions.find((item) => item.id === answerSelect.dataset.answerSpace);
-  if (!question) return;
-  question.answerSpace = answerSelect.value;
-  const customControl = answerSelect.parentElement.querySelector(".custom-answer-space");
-  customControl.hidden = answerSelect.value !== "custom";
-  if (answerSelect.value === "custom") {
-    customControl.querySelector("input").focus();
-  }
+  if (!sizeSelect) return;
+  const question = state.questions.find((item) => item.id === sizeSelect.dataset.questionSize);
+  if (question) question.size = sizeSelect.value;
 });
 
 elements.questionList.addEventListener("input", (event) => {
-  const answerInput = event.target.closest("[data-custom-answer-space]");
-  if (answerInput) {
-    const question = state.questions.find(
-      (item) => item.id === answerInput.dataset.customAnswerSpace,
-    );
-    const value = Number(answerInput.value);
-    if (question && Number.isFinite(value) && value > 0) {
-      question.customAnswerSpaceMm = Math.min(500, Math.round(value));
-    }
-    return;
+  const answerInput = event.target.closest("[data-answer-space-mm]");
+  if (!answerInput) return;
+  const question = state.questions.find((item) => item.id === answerInput.dataset.answerSpaceMm);
+  const value = Number(answerInput.value);
+  if (question && Number.isFinite(value) && value >= 0) {
+    question.answerSpaceMm = Math.min(2000, Math.round(value));
   }
+});
 
-  const dayInput = event.target.closest("[data-question-day]");
-  if (!dayInput) return;
-  const question = state.questions.find((item) => item.id === dayInput.dataset.questionDay);
-  const value = Number(dayInput.value);
-  if (question && Number.isFinite(value) && value > 0) {
-    question.day = Math.min(365, Math.round(value));
-    const badge = elements.questionList.querySelector(
-      `[data-question-day-badge="${question.id}"]`,
-    );
-    if (badge) badge.textContent = `第 ${question.day} 天`;
-  }
+elements.questionList.addEventListener("change", (event) => {
+  const answerInput = event.target.closest("[data-answer-space-mm]");
+  if (!answerInput) return;
+  const question = state.questions.find((item) => item.id === answerInput.dataset.answerSpaceMm);
+  if (!question) return;
+  answerInput.value = getQuestionAnswerSpaceMm(question);
+});
+
+elements.dayManagerToggle.addEventListener("click", () => {
+  const expanded = elements.dayManagerToggle.getAttribute("aria-expanded") === "true";
+  elements.dayManagerToggle.setAttribute("aria-expanded", String(!expanded));
+  elements.dayManagerBody.hidden = expanded;
+});
+
+elements.dayTabList.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-select-active-day]");
+  if (!button) return;
+  state.activeDay = Number(button.dataset.selectActiveDay);
+  renderDayManager();
+});
+
+elements.activeDayInput.addEventListener("change", () => {
+  const value = Number(elements.activeDayInput.value);
+  state.activeDay = Math.min(365, Math.max(1, Math.round(value) || 1));
+  renderDayManager();
+});
+
+elements.addDayButton.addEventListener("click", () => {
+  state.activeDay = Math.min(365, Math.max(...getKnownDays()) + 1);
+  renderDayManager();
 });
 
 elements.settingsToggle.addEventListener("click", () => {

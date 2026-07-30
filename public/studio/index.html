@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=11" />
+    <link rel="stylesheet" href="./styles.css?v=12" />
   </head>
   <body>
     <header class="topbar">
@@ -214,6 +214,46 @@
           </button>
         </div>
 
+        <section class="day-manager">
+          <button
+            class="day-manager-toggle"
+            id="dayManagerToggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="dayManagerBody"
+          >
+            <span>
+              <small>接下来加入</small>
+              <strong id="activeDayLabel">第 1 天</strong>
+            </span>
+            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+          <div class="day-manager-body" id="dayManagerBody" hidden>
+            <div class="day-current-row">
+              <label>
+                <span>当前天数</span>
+                <span class="day-number-input">
+                  第
+                  <input
+                    id="activeDayInput"
+                    type="number"
+                    min="1"
+                    max="365"
+                    step="1"
+                    inputmode="numeric"
+                    value="1"
+                    aria-label="接下来题目加入第几天"
+                  />
+                  天
+                </span>
+              </label>
+              <button id="addDayButton" type="button">+ 下一天</button>
+            </div>
+            <div class="day-tab-list" id="dayTabList"></div>
+            <p>先选择天数，再从试卷中框题；也可以把题拖到下面其他天的标签上。</p>
+          </div>
+        </section>
+
         <div class="question-list" id="questionList">
           <div class="question-empty">
             <span>+</span>
@@ -306,6 +346,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=11"></script>
+    <script type="module" src="./app.js?v=12"></script>
   </body>
 </html>
