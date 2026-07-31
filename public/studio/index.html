@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=14" />
+    <link rel="stylesheet" href="./styles.css?v=15" />
   </head>
   <body>
     <header class="topbar">
@@ -278,6 +278,18 @@
           </div>
         </section>
 
+        <section class="bulk-question-size" aria-labelledby="bulkQuestionSizeTitle">
+          <div class="bulk-question-size-heading">
+            <strong id="bulkQuestionSizeTitle">统一题目宽度</strong>
+            <small id="bulkQuestionSizeStatus">新题默认：标准</small>
+          </div>
+          <div class="bulk-question-size-buttons" role="group" aria-label="统一设置全部题目宽度">
+            <button type="button" data-bulk-question-size="compact" aria-pressed="false">紧凑</button>
+            <button class="active" type="button" data-bulk-question-size="standard" aria-pressed="true">标准</button>
+            <button type="button" data-bulk-question-size="full" aria-pressed="false">通栏</button>
+          </div>
+        </section>
+
         <div class="question-list" id="questionList">
           <div class="question-empty">
             <span>+</span>
@@ -394,6 +406,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=14"></script>
+    <script type="module" src="./app.js?v=15"></script>
   </body>
 </html>

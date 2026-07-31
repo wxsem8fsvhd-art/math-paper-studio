@@ -40,6 +40,8 @@ const elements = {
   zoomLabel: $("#zoomLabel"),
   questionList: $("#questionList"),
   questionCount: $("#questionCount"),
+  bulkQuestionSizeButtons: $$('[data-bulk-question-size]'),
+  bulkQuestionSizeStatus: $("#bulkQuestionSizeStatus"),
   dayManagerToggle: $("#dayManagerToggle"),
   dayManagerBody: $("#dayManagerBody"),
   activeDayLabel: $("#activeDayLabel"),
@@ -88,6 +90,7 @@ const state = {
   previewCanvases: [],
   renderToken: 0,
   activeDay: 1,
+  defaultQuestionSize: "standard",
   collapsedDays: new Set(),
   showPreviewRuler: false,
   composeView: "editor",
@@ -827,7 +830,7 @@ async function addSelectedQuestion() {
     height: cropCanvas.height,
     sourceName: document.name,
     sourcePage: selection.page,
-    size: "standard",
+    size: state.defaultQuestionSize,
     answerSpaceMm: 0,
     day: state.activeDay,
   });
@@ -919,9 +922,48 @@ function renderQuestionCard(question, index) {
     </article>`;
 }
 
+const QUESTION_SIZE_LABELS = {
+  compact: "紧凑",
+  standard: "标准",
+  full: "通栏",
+};
+
+function renderBulkQuestionSizeControls() {
+  const defaultSize = state.defaultQuestionSize;
+  const overrideCount = state.questions.filter((question) => question.size !== defaultSize).length;
+  elements.bulkQuestionSizeButtons.forEach((button) => {
+    const active = button.dataset.bulkQuestionSize === defaultSize;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+
+  if (!state.questions.length) {
+    elements.bulkQuestionSizeStatus.textContent = `新题默认：${QUESTION_SIZE_LABELS[defaultSize]}`;
+  } else if (overrideCount) {
+    elements.bulkQuestionSizeStatus.textContent = `新题默认：${QUESTION_SIZE_LABELS[defaultSize]} · ${overrideCount} 道单独调整`;
+  } else {
+    elements.bulkQuestionSizeStatus.textContent = `全部 ${state.questions.length} 道 · 新题也使用`;
+  }
+}
+
+function applyQuestionSizeToAll(size) {
+  if (!QUESTION_SIZE_LABELS[size]) return;
+  state.defaultQuestionSize = size;
+  state.questions.forEach((question) => {
+    question.size = size;
+  });
+  renderQuestions();
+  toast(
+    state.questions.length
+      ? `全部题目已改为“${QUESTION_SIZE_LABELS[size]}”，之后的新题也会使用。`
+      : `之后的新题默认使用“${QUESTION_SIZE_LABELS[size]}”。`,
+  );
+}
+
 function renderQuestions() {
   sortQuestionsByDay();
   renderDayManager();
+  renderBulkQuestionSizeControls();
   elements.questionCount.textContent = state.questions.length;
   elements.previewButton.disabled = !state.questions.length;
   elements.exportButton.disabled = !state.questions.length;
@@ -1578,6 +1620,7 @@ function clearAll() {
   state.activeDocumentId = null;
   state.activePage = 1;
   state.activeDay = 1;
+  state.defaultQuestionSize = "standard";
   state.collapsedDays.clear();
   clearSelection();
   renderDocumentList();
@@ -1802,6 +1845,9 @@ elements.viewerScrollRail.addEventListener("keydown", (event) => {
 
 elements.cancelSelectionButton.addEventListener("click", clearSelection);
 elements.addQuestionButton.addEventListener("click", addSelectedQuestion);
+elements.bulkQuestionSizeButtons.forEach((button) => {
+  button.addEventListener("click", () => applyQuestionSizeToAll(button.dataset.bulkQuestionSize));
+});
 
 elements.questionList.addEventListener("click", (event) => {
   const dayToggle = event.target.closest("[data-toggle-day-group]");
@@ -1841,6 +1887,7 @@ elements.questionList.addEventListener("change", (event) => {
   const question = state.questions.find((item) => item.id === sizeSelect.dataset.questionSize);
   if (question) {
     question.size = sizeSelect.value;
+    renderBulkQuestionSizeControls();
     markInlinePreviewDirty();
   }
 });
