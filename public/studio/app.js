@@ -1214,6 +1214,46 @@ async function buildPaperCanvases(scale = 2) {
     canvases.push(canvas);
   };
 
+  const measureQuestion = (question, image, reservedHeaderHeight = 0) => {
+    const numberWidth = config.showNumbers ? 10 * pxPerMm : 0;
+    const sizeFactor =
+      question.size === "compact" ? 0.78 : question.size === "full" ? 1 : 0.9;
+    const requiredColumns = question.size === "full" && config.columns === 2 ? 2 : 1;
+    const availableWidth =
+      requiredColumns === 2 ? innerWidth : Math.min(columnWidth, columnWidth * sizeFactor);
+    const maximumWidth =
+      (requiredColumns === 2 ? innerWidth : columnWidth) - numberWidth;
+    let imageWidth = Math.min(
+      maximumWidth,
+      (availableWidth - numberWidth) * config.questionScale,
+    );
+    let imageHeight = imageWidth * (image.height / image.width);
+    const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
+    const answerHeight = getQuestionAnswerSpaceMm(question) * pxPerMm;
+    const answerGap = answerHeight > 0 ? 4 * pxPerMm : 0;
+    // Keep the selected crop legible. Only unusually tall crops are reduced;
+    // answer space continues on following pages instead of shrinking the crop.
+    const maxImageHeight = Math.max(
+      12 * pxPerMm,
+      bottomLimit - contentTop - reservedHeaderHeight - sourceHeight - gap,
+    );
+    if (imageHeight > maxImageHeight) {
+      const fit = maxImageHeight / imageHeight;
+      imageWidth *= fit;
+      imageHeight *= fit;
+    }
+    return {
+      numberWidth,
+      requiredColumns,
+      imageWidth,
+      imageHeight,
+      sourceHeight,
+      answerHeight,
+      answerGap,
+      questionOnlyHeight: imageHeight + sourceHeight + gap,
+    };
+  };
+
   newPage();
 
   for (let index = 0; index < state.questions.length; index += 1) {
@@ -1223,31 +1263,94 @@ async function buildPaperCanvases(scale = 2) {
     const previousDay = index > 0 ? getQuestionDay(state.questions[index - 1]) : null;
     const startsNewDay = !state.simpleMode && (index === 0 || day !== previousDay);
     const dayHeaderHeight = startsNewDay ? 10 * pxPerMm : 0;
-    const numberWidth = config.showNumbers ? 10 * pxPerMm : 0;
-    const sizeFactor = question.size === "compact" ? 0.78 : question.size === "full" ? 1 : 0.9;
-    const requiredColumns = question.size === "full" && config.columns === 2 ? 2 : 1;
-    const availableWidth =
-      requiredColumns === 2 ? innerWidth : Math.min(columnWidth, columnWidth * sizeFactor);
-    let imageWidth = (availableWidth - numberWidth) * config.questionScale;
-    let imageHeight = imageWidth * (image.height / image.width);
-    const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
-    const answerSpaceMm = getQuestionAnswerSpaceMm(question);
-    const answerHeight = answerSpaceMm * pxPerMm;
-    const answerGap = answerHeight > 0 ? 4 * pxPerMm : 0;
-    // The selected question width must not be sacrificed to make answer space fit.
-    // Only scale an unusually tall crop enough for the question itself to fit on a
-    // fresh page; any answer space that does not fit continues on following pages.
-    const maxImageHeight = Math.max(
-      12 * pxPerMm,
-      bottomLimit - contentTop - dayHeaderHeight - sourceHeight - gap,
-    );
-    if (imageHeight > maxImageHeight) {
-      const fit = maxImageHeight / imageHeight;
-      imageWidth *= fit;
-      imageHeight *= fit;
-    }
-    const questionOnlyHeight = imageHeight + sourceHeight + gap;
+    const metrics = measureQuestion(question, image, dayHeaderHeight);
+    const {
+      numberWidth,
+      requiredColumns,
+      imageWidth,
+      imageHeight,
+      sourceHeight,
+      answerHeight,
+      answerGap,
+      questionOnlyHeight,
+    } = metrics;
     let remainingAnswerHeight = answerHeight;
+
+    // In a single-column document, smaller questions should use the available
+    // horizontal space instead of leaving a large blank strip on the right.
+    // Questions with answer space stay on their own row so the writing area is
+    // never squeezed into a narrow column.
+    if (config.columns === 1 && answerHeight === 0) {
+      const rowGap = Math.max(gap, 6 * pxPerMm);
+      const rowItems = [];
+      let rowWidth = 0;
+      let rowHeight = 0;
+
+      for (
+        let candidateIndex = index;
+        candidateIndex < state.questions.length;
+        candidateIndex += 1
+      ) {
+        const candidate = state.questions[candidateIndex];
+        if (!state.simpleMode && getQuestionDay(candidate) !== day) break;
+        const candidateMetrics =
+          candidateIndex === index
+            ? metrics
+            : measureQuestion(candidate, images[candidateIndex], dayHeaderHeight);
+        if (candidateMetrics.answerHeight > 0 || candidateMetrics.requiredColumns !== 1) break;
+
+        const candidateWidth = candidateMetrics.numberWidth + candidateMetrics.imageWidth;
+        const proposedWidth =
+          rowWidth + (rowItems.length > 0 ? rowGap : 0) + candidateWidth;
+        if (rowItems.length > 0 && proposedWidth > innerWidth) break;
+
+        rowItems.push({
+          index: candidateIndex,
+          question: candidate,
+          image: images[candidateIndex],
+          metrics: candidateMetrics,
+          width: candidateWidth,
+        });
+        rowWidth = proposedWidth;
+        rowHeight = Math.max(
+          rowHeight,
+          candidateMetrics.imageHeight + candidateMetrics.sourceHeight,
+        );
+      }
+
+      let rowY = positions[0].y;
+      if (rowY + dayHeaderHeight + rowHeight + gap > bottomLimit) {
+        newPage();
+        rowY = contentTop;
+      }
+      if (startsNewDay) {
+        drawDayHeader(context, day, margin, rowY, innerWidth, pxPerMm);
+        rowY += dayHeaderHeight;
+      }
+
+      let rowX = margin + Math.max(0, (innerWidth - rowWidth) / 2);
+      rowItems.forEach((item) => {
+        drawQuestion(
+          context,
+          item.question,
+          item.image,
+          item.index,
+          rowX,
+          rowY,
+          item.metrics.imageWidth,
+          item.metrics.imageHeight,
+          item.metrics.numberWidth,
+          0,
+          0,
+          config,
+          pxPerMm,
+        );
+        rowX += item.width + rowGap;
+      });
+      positions[0].y = rowY + rowHeight + gap;
+      index += rowItems.length - 1;
+      continue;
+    }
 
     if (startsNewDay) {
       let headerY =
@@ -1308,7 +1411,11 @@ async function buildPaperCanvases(scale = 2) {
           columnIndex = 0;
         }
       }
-      const x = positions[columnIndex].x;
+      const x =
+        config.columns === 1
+          ? positions[columnIndex].x +
+            Math.max(0, (columnWidth - numberWidth - imageWidth) / 2)
+          : positions[columnIndex].x;
       const y = positions[columnIndex].y;
       const maximumFirstAnswerHeight = Math.max(
         0,
@@ -1341,7 +1448,10 @@ async function buildPaperCanvases(scale = 2) {
       newPage();
       const maximumContinuationHeight = bottomLimit - contentTop - gap;
       const continuationHeight = Math.min(remainingAnswerHeight, maximumContinuationHeight);
-      const continuationX = margin + numberWidth;
+      const continuationX =
+        config.columns === 1
+          ? margin + Math.max(0, (innerWidth - numberWidth - imageWidth) / 2) + numberWidth
+          : margin + numberWidth;
       drawAnswerArea(
         context,
         continuationX,
