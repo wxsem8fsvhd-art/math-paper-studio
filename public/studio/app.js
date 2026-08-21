@@ -67,6 +67,8 @@ const elements = {
   marginOutput: $("#marginOutput"),
   questionGap: $("#questionGap"),
   gapOutput: $("#gapOutput"),
+  questionScale: $("#questionScale"),
+  questionScaleOutput: $("#questionScaleOutput"),
   showNumbers: $("#showNumbers"),
   showSources: $("#showSources"),
   previewModal: $("#previewModal"),
@@ -1142,6 +1144,7 @@ function getLayoutConfig() {
     heightMm: landscape ? 210 : 297,
     marginMm: Number(elements.pageMargin.value),
     gapMm: Number(elements.questionGap.value),
+    questionScale: Number(elements.questionScale.value) / 100,
     columns: Number(elements.columns.value),
     title: elements.paperTitle.value.trim() || "数学专题练习",
     showNumbers: elements.showNumbers.checked,
@@ -1225,7 +1228,7 @@ async function buildPaperCanvases(scale = 2) {
     const requiredColumns = question.size === "full" && config.columns === 2 ? 2 : 1;
     const availableWidth =
       requiredColumns === 2 ? innerWidth : Math.min(columnWidth, columnWidth * sizeFactor);
-    let imageWidth = availableWidth - numberWidth;
+    let imageWidth = (availableWidth - numberWidth) * config.questionScale;
     let imageHeight = imageWidth * (image.height / image.width);
     const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
     const answerSpaceMm = getQuestionAnswerSpaceMm(question);
@@ -1989,6 +1992,10 @@ elements.pageMargin.addEventListener("input", () => {
 });
 elements.questionGap.addEventListener("input", () => {
   elements.gapOutput.textContent = `${elements.questionGap.value} mm`;
+  markInlinePreviewDirty();
+});
+elements.questionScale.addEventListener("input", () => {
+  elements.questionScaleOutput.textContent = `${elements.questionScale.value}%`;
   markInlinePreviewDirty();
 });
 

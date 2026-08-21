@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=17" />
+    <link rel="stylesheet" href="./styles.css?v=18" />
   </head>
   <body>
     <header class="topbar">
@@ -350,6 +350,18 @@
               <div><span>题目间距</span><output id="gapOutput">8 mm</output></div>
               <input id="questionGap" type="range" min="4" max="16" value="8" />
             </div>
+            <div class="range-field">
+              <div><span>题目整体缩放</span><output id="questionScaleOutput">100%</output></div>
+              <input
+                id="questionScale"
+                type="range"
+                min="40"
+                max="120"
+                step="5"
+                value="100"
+                aria-label="题目整体缩放比例"
+              />
+            </div>
             <label class="switch-row">
               <span>
                 <strong>自动添加题号</strong>
@@ -418,6 +430,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=17"></script>
+    <script type="module" src="./app.js?v=18"></script>
   </body>
 </html>
