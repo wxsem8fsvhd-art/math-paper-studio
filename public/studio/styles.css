@@ -949,6 +949,69 @@ body.resizing-panes {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: #f7f9fb;
+}
+
+.compose-mode-panel {
+  flex: 0 0 auto;
+  padding: 0 11px;
+  background: #fff;
+  border-bottom: 1px solid var(--soft-line);
+}
+
+.mode-switch-row {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #4a596f;
+  cursor: pointer;
+}
+
+.mode-switch-row strong {
+  font-size: 10px;
+}
+
+.mode-switch-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mode-switch-row i {
+  position: relative;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 18px;
+  background: #c7d0dc;
+  border-radius: 10px;
+  transition: background 0.16s ease;
+}
+
+.mode-switch-row i::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(31, 45, 64, 0.2);
+  transition: transform 0.16s ease;
+}
+
+.mode-switch-row input:checked + i {
+  background: var(--blue);
+}
+
+.mode-switch-row input:checked + i::after {
+  transform: translateX(14px);
+}
+
+.mode-switch-row:focus-within {
+  color: var(--blue);
 }
 
 .compose-preview-view {
@@ -1007,7 +1070,7 @@ body.resizing-panes {
 .day-manager {
   flex: 0 0 auto;
   background: #fff;
-  border-bottom: 1px solid var(--soft-line);
+  border-block: 1px solid var(--soft-line);
 }
 
 .day-manager-toggle {
@@ -1133,7 +1196,7 @@ body.resizing-panes {
   grid-template-columns: minmax(0, 1fr) 138px;
   align-items: center;
   gap: 10px;
-  padding: 9px 11px;
+  padding: 8px 11px;
   background: #fff;
   border-bottom: 1px solid var(--soft-line);
 }
@@ -1193,9 +1256,13 @@ body.resizing-panes {
 .question-list {
   min-height: 160px;
   flex: 1;
-  padding: 11px;
+  padding: 10px 11px 14px;
   overflow: auto;
   background: #fbfcfd;
+}
+
+.simple-question-group .question-card:last-child {
+  margin-bottom: 0;
 }
 
 .day-group + .day-group {
@@ -1308,9 +1375,9 @@ body.resizing-panes {
 .question-card {
   display: grid;
   grid-template-columns: 18px 1fr;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding: 9px;
+  gap: 7px;
+  margin-bottom: 7px;
+  padding: 8px;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1345,7 +1412,7 @@ body.resizing-panes {
 }
 
 .question-preview {
-  height: 78px;
+  height: 68px;
   display: flex;
   align-items: flex-start;
   justify-content: flex-start;
@@ -1416,7 +1483,7 @@ body.resizing-panes {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
-  margin-top: 7px;
+  margin-top: 6px;
 }
 
 .question-option {
@@ -1455,7 +1522,7 @@ body.resizing-panes {
 
 .settings-heading {
   width: 100%;
-  height: 46px;
+  height: 42px;
   display: flex;
   align-items: center;
   justify-content: space-between;

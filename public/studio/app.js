@@ -40,6 +40,7 @@ const elements = {
   zoomLabel: $("#zoomLabel"),
   questionList: $("#questionList"),
   questionCount: $("#questionCount"),
+  simpleModeToggle: $("#simpleModeToggle"),
   bulkQuestionSizeButtons: $$('[data-bulk-question-size]'),
   bulkQuestionSizeStatus: $("#bulkQuestionSizeStatus"),
   dayManagerToggle: $("#dayManagerToggle"),
@@ -90,6 +91,7 @@ const state = {
   previewCanvases: [],
   renderToken: 0,
   activeDay: 1,
+  simpleMode: false,
   defaultQuestionSize: "standard",
   collapsedDays: new Set(),
   showPreviewRuler: false,
@@ -122,6 +124,9 @@ const MAX_CONTINUOUS_WORKERS = 2;
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 function toast(message, type = "success") {
+  while (elements.toastRegion.children.length >= 2) {
+    elements.toastRegion.firstElementChild.remove();
+  }
   const item = document.createElement("div");
   item.className = `toast ${type === "error" ? "error" : ""}`;
   item.textContent = message;
@@ -176,6 +181,7 @@ function getQuestionAnswerSpaceMm(question) {
 }
 
 function sortQuestionsByDay() {
+  if (state.simpleMode) return;
   state.questions.sort((a, b) => getQuestionDay(a) - getQuestionDay(b));
 }
 
@@ -842,6 +848,7 @@ async function addSelectedQuestion() {
 }
 
 function renderDayManager() {
+  elements.dayManagerToggle.closest(".day-manager").hidden = state.simpleMode;
   elements.activeDayLabel.textContent = `第 ${state.activeDay} 天`;
   elements.activeDayInput.value = state.activeDay;
   elements.dayTabList.innerHTML = getKnownDays()
@@ -980,6 +987,18 @@ function renderQuestions() {
   }
 
   const indexById = new Map(state.questions.map((question, index) => [question.id, index]));
+  if (state.simpleMode) {
+    elements.questionList.innerHTML = `
+      <section class="simple-question-group" aria-label="复习题目">
+        ${state.questions
+          .map((question) => renderQuestionCard(question, indexById.get(question.id)))
+          .join("")}
+      </section>`;
+    bindQuestionDragging();
+    markInlinePreviewDirty();
+    return;
+  }
+
   const days = getKnownDays();
   elements.questionList.innerHTML = days
     .map((day) => {
@@ -1016,6 +1035,15 @@ function renderQuestions() {
 }
 
 function moveQuestion(id, direction) {
+  if (state.simpleMode) {
+    const index = state.questions.findIndex((item) => item.id === id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= state.questions.length) return;
+    [state.questions[index], state.questions[target]] = [state.questions[target], state.questions[index]];
+    renderQuestions();
+    return;
+  }
+
   const question = state.questions.find((item) => item.id === id);
   if (!question) return;
   const day = getQuestionDay(question);
@@ -1084,7 +1112,7 @@ function bindQuestionDragging() {
       if (from < 0) return;
       const [item] = state.questions.splice(from, 1);
       const targetQuestion = state.questions.find((question) => question.id === targetId);
-      item.day = getQuestionDay(targetQuestion);
+      if (!state.simpleMode) item.day = getQuestionDay(targetQuestion);
       const to = state.questions.findIndex((question) => question.id === targetId);
       state.questions.splice(to, 0, item);
       renderQuestions();
@@ -1190,7 +1218,7 @@ async function buildPaperCanvases(scale = 2) {
     const image = images[index];
     const day = getQuestionDay(question);
     const previousDay = index > 0 ? getQuestionDay(state.questions[index - 1]) : null;
-    const startsNewDay = index === 0 || day !== previousDay;
+    const startsNewDay = !state.simpleMode && (index === 0 || day !== previousDay);
     const dayHeaderHeight = startsNewDay ? 10 * pxPerMm : 0;
     const numberWidth = config.showNumbers ? 10 * pxPerMm : 0;
     const sizeFactor = question.size === "compact" ? 0.78 : question.size === "full" ? 1 : 0.9;
@@ -1318,7 +1346,9 @@ async function buildPaperCanvases(scale = 2) {
         imageWidth,
         continuationHeight,
         pxPerMm,
-        `第 ${day} 天 · 第 ${index + 1} 题答题区（续）`,
+        state.simpleMode
+          ? `第 ${index + 1} 题答题区（续）`
+          : `第 ${day} 天 · 第 ${index + 1} 题答题区（续）`,
       );
       const continuationBottom = contentTop + continuationHeight + gap;
       if (requiredColumns === 2) {
@@ -1620,6 +1650,8 @@ function clearAll() {
   state.activeDocumentId = null;
   state.activePage = 1;
   state.activeDay = 1;
+  state.simpleMode = false;
+  elements.simpleModeToggle.checked = false;
   state.defaultQuestionSize = "standard";
   state.collapsedDays.clear();
   clearSelection();
@@ -1845,6 +1877,16 @@ elements.viewerScrollRail.addEventListener("keydown", (event) => {
 
 elements.cancelSelectionButton.addEventListener("click", clearSelection);
 elements.addQuestionButton.addEventListener("click", addSelectedQuestion);
+elements.simpleModeToggle.addEventListener("change", () => {
+  state.simpleMode = elements.simpleModeToggle.checked;
+  renderQuestions();
+  markInlinePreviewDirty();
+  toast(
+    state.simpleMode
+      ? "已切换为简洁复习：不再显示按天分组。"
+      : "已切换为分天作业：恢复原有天数分组。",
+  );
+});
 elements.bulkQuestionSizeButtons.forEach((button) => {
   button.addEventListener("click", () => applyQuestionSizeToAll(button.dataset.bulkQuestionSize));
 });
