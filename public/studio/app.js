@@ -91,6 +91,7 @@ const state = {
   inlinePreviewDirty: true,
   inlinePreviewToken: 0,
   paneDrag: null,
+  lastLayout: null,
 };
 
 const thumbnailState = {
@@ -651,15 +652,21 @@ function updatePageControls() {
   elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
 }
 
-function scrollViewer(top = 0, left = 0) {
+function scrollViewer(top = 0, left = 0, behavior = "auto") {
   const stage = elements.viewerStage;
+  const maxTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
+  const maxLeft = Math.max(0, stage.scrollWidth - stage.clientWidth);
+  const targetTop = Math.max(0, Math.min(maxTop, stage.scrollTop + top));
+  const targetLeft = Math.max(0, Math.min(maxLeft, stage.scrollLeft + left));
+  if (behavior === "smooth") {
+    stage.scrollTo({ top: targetTop, left: targetLeft, behavior: "smooth" });
+    return;
+  }
   if (top) {
-    const maxTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
-    stage.scrollTop = Math.max(0, Math.min(maxTop, stage.scrollTop + top));
+    stage.scrollTop = targetTop;
   }
   if (left) {
-    const maxLeft = Math.max(0, stage.scrollWidth - stage.clientWidth);
-    stage.scrollLeft = Math.max(0, Math.min(maxLeft, stage.scrollLeft + left));
+    stage.scrollLeft = targetLeft;
   }
   updateViewerScrollRail();
 }
@@ -1083,6 +1090,7 @@ async function buildPaperCanvases(scale = 2) {
   const contentTop = margin + titleHeight;
   const bottomLimit = pageHeight - margin;
   const canvases = [];
+  const layoutItems = [];
   const images = await Promise.all(state.questions.map((question) => imageFromUrl(question.image)));
   const textRatios = state.questions
     .map((question) => Number(question.textHeightRatio))
@@ -1145,10 +1153,13 @@ async function buildPaperCanvases(scale = 2) {
       config.normalizeTextSize && medianTextRatio && Number.isFinite(questionTextRatio) && questionTextRatio > 0
         ? Math.min(1.6, Math.max(0.65, medianTextRatio / questionTextRatio))
         : 1;
-    let imageWidth = Math.min(
-      maximumWidth,
-      (availableWidth - numberWidth) * config.questionScale * textNormalization,
-    );
+    let imageWidth =
+      question.size === "full"
+        ? maximumWidth
+        : Math.min(
+            maximumWidth,
+            (availableWidth - numberWidth) * config.questionScale * textNormalization,
+          );
     let imageHeight = imageWidth * (image.height / image.width);
     const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
     const answerHeight = getQuestionAnswerSpaceMm(question) * pxPerMm;
@@ -1174,6 +1185,18 @@ async function buildPaperCanvases(scale = 2) {
       answerGap,
       questionOnlyHeight: imageHeight + sourceHeight + gap,
     };
+  };
+
+  const recordQuestionLayout = (questionIndex, pageIndex, x, metrics) => {
+    layoutItems.push({
+      questionIndex,
+      pageIndex,
+      numberX: x,
+      imageX: x + metrics.numberWidth,
+      imageWidth: metrics.imageWidth,
+      rightEdge: x + metrics.numberWidth + metrics.imageWidth,
+      size: state.questions[questionIndex].size,
+    });
   };
 
   newPage();
@@ -1241,8 +1264,10 @@ async function buildPaperCanvases(scale = 2) {
         rowY = contentTop;
       }
 
-      let rowX = margin + Math.max(0, (innerWidth - rowWidth) / 2);
+      let rowX =
+        rowItems.length === 1 ? margin : margin + Math.max(0, (innerWidth - rowWidth) / 2);
       rowItems.forEach((item) => {
+        recordQuestionLayout(item.index, canvases.length - 1, rowX, item.metrics);
         drawQuestion(
           context,
           item.question,
@@ -1282,6 +1307,7 @@ async function buildPaperCanvases(scale = 2) {
       const firstAnswerGap = firstAnswerHeight > 0 ? answerGap : 0;
       const blockHeight =
         imageHeight + sourceHeight + firstAnswerGap + firstAnswerHeight + gap;
+      recordQuestionLayout(index, canvases.length - 1, margin, metrics);
       drawQuestion(
         context,
         question,
@@ -1310,11 +1336,7 @@ async function buildPaperCanvases(scale = 2) {
           columnIndex = 0;
         }
       }
-      const x =
-        config.columns === 1
-          ? positions[columnIndex].x +
-            Math.max(0, (columnWidth - numberWidth - imageWidth) / 2)
-          : positions[columnIndex].x;
+      const x = positions[columnIndex].x;
       const y = positions[columnIndex].y;
       const maximumFirstAnswerHeight = Math.max(
         0,
@@ -1324,6 +1346,7 @@ async function buildPaperCanvases(scale = 2) {
       const firstAnswerGap = firstAnswerHeight > 0 ? answerGap : 0;
       const blockHeight =
         imageHeight + sourceHeight + firstAnswerGap + firstAnswerHeight + gap;
+      recordQuestionLayout(index, canvases.length - 1, x, metrics);
       drawQuestion(
         context,
         question,
@@ -1347,10 +1370,7 @@ async function buildPaperCanvases(scale = 2) {
       newPage();
       const maximumContinuationHeight = bottomLimit - contentTop - gap;
       const continuationHeight = Math.min(remainingAnswerHeight, maximumContinuationHeight);
-      const continuationX =
-        config.columns === 1
-          ? margin + Math.max(0, (innerWidth - numberWidth - imageWidth) / 2) + numberWidth
-          : margin + numberWidth;
+      const continuationX = margin + numberWidth;
       drawAnswerArea(
         context,
         continuationX,
@@ -1378,6 +1398,14 @@ async function buildPaperCanvases(scale = 2) {
     pageContext.textAlign = "center";
     pageContext.fillText(`${index + 1} / ${canvases.length}`, pageWidth / 2, pageHeight - margin / 2);
   });
+
+  state.lastLayout = {
+    pageWidth,
+    pageHeight,
+    margin,
+    innerWidth,
+    items: layoutItems,
+  };
 
   return canvases;
 }
@@ -1853,8 +1881,8 @@ elements.viewerScrollRail.addEventListener("pointercancel", finishScrollDrag);
 elements.viewerScrollRail.addEventListener("keydown", (event) => {
   const pageDistance = Math.max(240, elements.viewerStage.clientHeight * 0.82);
   const keyActions = {
-    ArrowUp: () => scrollViewer(-80),
-    ArrowDown: () => scrollViewer(80),
+    ArrowUp: () => scrollViewer(-110, 0, "smooth"),
+    ArrowDown: () => scrollViewer(110, 0, "smooth"),
     PageUp: () => scrollViewer(-pageDistance),
     PageDown: () => scrollViewer(pageDistance),
     Home: () => {
@@ -1867,6 +1895,7 @@ elements.viewerScrollRail.addEventListener("keydown", (event) => {
   const action = keyActions[event.key];
   if (!action) return;
   event.preventDefault();
+  event.stopPropagation();
   action();
   updateViewerScrollRail();
 });
@@ -1973,7 +2002,21 @@ elements.modalExportButton.addEventListener("click", exportPdf);
 elements.exportButton.addEventListener("click", exportPdf);
 elements.clearAllButton.addEventListener("click", clearAll);
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !elements.previewModal.hidden) closePreview();
+  if (event.key === "Escape" && !elements.previewModal.hidden) {
+    closePreview();
+    return;
+  }
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+  if (!elements.previewModal.hidden || !getActiveDocument()) return;
+  const target = event.target;
+  if (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+  ) {
+    return;
+  }
+  event.preventDefault();
+  scrollViewer(event.key === "ArrowUp" ? -110 : 110, 0, "smooth");
 });
 let viewerResizeTimer = null;
 window.addEventListener("resize", () => {
