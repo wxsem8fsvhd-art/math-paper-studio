@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=19" />
+    <link rel="stylesheet" href="./styles.css?v=20" />
   </head>
   <body>
     <header class="topbar">
@@ -238,58 +238,6 @@
         </div>
 
         <div class="compose-view compose-editor-view" id="composeEditorView">
-          <section class="compose-mode-panel">
-            <label
-              class="mode-switch-row"
-              for="simpleModeToggle"
-              title="开启后隐藏天数分组，题目按当前顺序连续排列"
-            >
-              <strong>简洁复习</strong>
-              <input id="simpleModeToggle" type="checkbox" />
-              <i aria-hidden="true"></i>
-            </label>
-          </section>
-
-          <section class="day-manager">
-          <button
-            class="day-manager-toggle"
-            id="dayManagerToggle"
-            type="button"
-            aria-expanded="false"
-            aria-controls="dayManagerBody"
-          >
-            <span>
-              <small>接下来加入</small>
-              <strong id="activeDayLabel">第 1 天</strong>
-            </span>
-            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-          </button>
-          <div class="day-manager-body" id="dayManagerBody" hidden>
-            <div class="day-current-row">
-              <label>
-                <span>当前天数</span>
-                <span class="day-number-input">
-                  第
-                  <input
-                    id="activeDayInput"
-                    type="number"
-                    min="1"
-                    max="365"
-                    step="1"
-                    inputmode="numeric"
-                    value="1"
-                    aria-label="接下来题目加入第几天"
-                  />
-                  天
-                </span>
-              </label>
-              <button id="addDayButton" type="button">+ 下一天</button>
-            </div>
-            <div class="day-tab-list" id="dayTabList"></div>
-            <p>先选择天数，再从试卷中框题；也可以把题拖到下面其他天的标签上。</p>
-          </div>
-          </section>
-
         <section class="bulk-question-size" aria-labelledby="bulkQuestionSizeTitle">
           <div class="bulk-question-size-heading">
             <strong id="bulkQuestionSizeTitle">统一题目宽度</strong>
@@ -327,13 +275,11 @@
               <input id="paperTitle" type="text" value="数学专题练习" maxlength="40" />
             </label>
             <div class="field-row">
-              <label class="field">
-                <span>纸张</span>
-                <select id="paperSize">
-                  <option value="a4" selected>A4 纵向</option>
-                  <option value="a4-landscape">A4 横向</option>
-                </select>
-              </label>
+              <div class="field fixed-paper-field">
+                <span>输出纸张</span>
+                <strong>A4 竖向</strong>
+                <small>横版、竖版资料均自动适配</small>
+              </div>
               <label class="field">
                 <span>分栏</span>
                 <select id="columns">
@@ -362,6 +308,14 @@
                 aria-label="题目整体缩放比例"
               />
             </div>
+            <label class="switch-row">
+              <span>
+                <strong>自动统一文字大小</strong>
+                <small>按每道题的典型文字高度自动校正比例</small>
+              </span>
+              <input id="normalizeTextSize" type="checkbox" checked />
+              <i></i>
+            </label>
             <label class="switch-row">
               <span>
                 <strong>自动添加题号</strong>
@@ -430,6 +384,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=19"></script>
+    <script type="module" src="./app.js?v=20"></script>
   </body>
 </html>

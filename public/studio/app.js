@@ -40,15 +40,8 @@ const elements = {
   zoomLabel: $("#zoomLabel"),
   questionList: $("#questionList"),
   questionCount: $("#questionCount"),
-  simpleModeToggle: $("#simpleModeToggle"),
   bulkQuestionSizeButtons: $$('[data-bulk-question-size]'),
   bulkQuestionSizeStatus: $("#bulkQuestionSizeStatus"),
-  dayManagerToggle: $("#dayManagerToggle"),
-  dayManagerBody: $("#dayManagerBody"),
-  activeDayLabel: $("#activeDayLabel"),
-  activeDayInput: $("#activeDayInput"),
-  dayTabList: $("#dayTabList"),
-  addDayButton: $("#addDayButton"),
   composeEditorView: $("#composeEditorView"),
   composePreviewView: $("#composePreviewView"),
   composeViewTabs: $$("[data-compose-view]"),
@@ -61,7 +54,6 @@ const elements = {
   settingsToggle: $("#settingsToggle"),
   settingsBody: $("#settingsBody"),
   paperTitle: $("#paperTitle"),
-  paperSize: $("#paperSize"),
   columns: $("#columns"),
   pageMargin: $("#pageMargin"),
   marginOutput: $("#marginOutput"),
@@ -69,6 +61,7 @@ const elements = {
   gapOutput: $("#gapOutput"),
   questionScale: $("#questionScale"),
   questionScaleOutput: $("#questionScaleOutput"),
+  normalizeTextSize: $("#normalizeTextSize"),
   showNumbers: $("#showNumbers"),
   showSources: $("#showSources"),
   previewModal: $("#previewModal"),
@@ -92,10 +85,7 @@ const state = {
   scrollDrag: null,
   previewCanvases: [],
   renderToken: 0,
-  activeDay: 1,
-  simpleMode: false,
   defaultQuestionSize: "standard",
-  collapsedDays: new Set(),
   showPreviewRuler: false,
   composeView: "editor",
   inlinePreviewDirty: true,
@@ -160,10 +150,6 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-function getQuestionDay(question) {
-  return Math.min(365, Math.max(1, Math.round(Number(question.day) || 1)));
-}
-
 function getQuestionAnswerSpaceMm(question) {
   const directValue = Number(question.answerSpaceMm);
   if (Number.isFinite(directValue) && directValue >= 0) {
@@ -180,17 +166,6 @@ function getQuestionAnswerSpaceMm(question) {
     medium: 50,
     large: 80,
   }[question.answerSpace || "none"];
-}
-
-function sortQuestionsByDay() {
-  if (state.simpleMode) return;
-  state.questions.sort((a, b) => getQuestionDay(a) - getQuestionDay(b));
-}
-
-function getKnownDays() {
-  return [...new Set([1, state.activeDay, ...state.questions.map(getQuestionDay)])].sort(
-    (a, b) => a - b,
-  );
 }
 
 async function handleFiles(files) {
@@ -795,6 +770,51 @@ async function finalizeSelection(rect, pointerContext) {
   await addSelectedQuestion();
 }
 
+function estimateTextHeightRatio(sourceCanvas) {
+  const sampleWidth = Math.min(640, sourceCanvas.width);
+  const scale = sampleWidth / sourceCanvas.width;
+  const sampleHeight = Math.max(1, Math.round(sourceCanvas.height * scale));
+  const sample = window.document.createElement("canvas");
+  sample.width = sampleWidth;
+  sample.height = sampleHeight;
+  const context = sample.getContext("2d", { willReadFrequently: true });
+  context.drawImage(sourceCanvas, 0, 0, sampleWidth, sampleHeight);
+  const pixels = context.getImageData(0, 0, sampleWidth, sampleHeight).data;
+  const activeRows = [];
+  const minimumInk = Math.max(3, Math.round(sampleWidth * 0.004));
+
+  for (let y = 0; y < sampleHeight; y += 1) {
+    let ink = 0;
+    for (let x = 0; x < sampleWidth; x += 1) {
+      const offset = (y * sampleWidth + x) * 4;
+      const luminance =
+        pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114;
+      if (luminance < 175) ink += 1;
+    }
+    activeRows.push(ink >= minimumInk);
+  }
+
+  const bands = [];
+  let start = -1;
+  let lastActive = -1;
+  for (let y = 0; y <= sampleHeight; y += 1) {
+    if (y < sampleHeight && activeRows[y]) {
+      if (start < 0) start = y;
+      lastActive = y;
+    } else if (start >= 0 && (y > lastActive + 2 || y === sampleHeight)) {
+      const height = lastActive - start + 1;
+      if (height >= 3 && height <= Math.max(30, sampleHeight * 0.08)) bands.push(height);
+      start = -1;
+      lastActive = -1;
+    }
+  }
+
+  if (!bands.length) return null;
+  bands.sort((a, b) => a - b);
+  const medianHeight = bands[Math.floor(bands.length / 2)];
+  return medianHeight / sampleWidth;
+}
+
 async function addSelectedQuestion() {
   const document = getActiveDocument();
   const selection = state.selection;
@@ -840,30 +860,13 @@ async function addSelectedQuestion() {
     sourcePage: selection.page,
     size: state.defaultQuestionSize,
     answerSpaceMm: 0,
-    day: state.activeDay,
+    textHeightRatio: estimateTextHeightRatio(cropCanvas),
   });
 
   clearSelection();
   renderQuestions();
   setSaveStatus("仅在本机处理");
   toast(`第 ${state.questions.length} 题已加入练习。`);
-}
-
-function renderDayManager() {
-  elements.dayManagerToggle.closest(".day-manager").hidden = state.simpleMode;
-  elements.activeDayLabel.textContent = `第 ${state.activeDay} 天`;
-  elements.activeDayInput.value = state.activeDay;
-  elements.dayTabList.innerHTML = getKnownDays()
-    .map(
-      (day) => `
-        <button
-          type="button"
-          class="${day === state.activeDay ? "active" : ""}"
-          data-select-active-day="${day}"
-          aria-pressed="${day === state.activeDay}"
-        >第 ${day} 天</button>`,
-    )
-    .join("");
 }
 
 function renderQuestionCard(question, index) {
@@ -875,7 +878,7 @@ function renderQuestionCard(question, index) {
         class="drag-handle"
         draggable="true"
         data-drag-question="${question.id}"
-        title="拖动排序或拖到其他天"
+        title="拖动调整题目顺序"
       ></span>
       <div class="question-main">
         <div class="question-preview">
@@ -970,8 +973,6 @@ function applyQuestionSizeToAll(size) {
 }
 
 function renderQuestions() {
-  sortQuestionsByDay();
-  renderDayManager();
   renderBulkQuestionSizeControls();
   elements.questionCount.textContent = state.questions.length;
   elements.previewButton.disabled = !state.questions.length;
@@ -982,102 +983,26 @@ function renderQuestions() {
       <div class="question-empty">
         <span>+</span>
         <strong>框选的题目会出现在这里</strong>
-        <p>先在上方选择第几天，再从试卷中框选题目。</p>
+        <p>从试卷中框选题目后，会按选择顺序自动排版。</p>
       </div>`;
     markInlinePreviewDirty();
     return;
   }
 
-  const indexById = new Map(state.questions.map((question, index) => [question.id, index]));
-  if (state.simpleMode) {
-    elements.questionList.innerHTML = `
-      <section class="simple-question-group" aria-label="复习题目">
-        ${state.questions
-          .map((question) => renderQuestionCard(question, indexById.get(question.id)))
-          .join("")}
-      </section>`;
-    bindQuestionDragging();
-    markInlinePreviewDirty();
-    return;
-  }
-
-  const days = getKnownDays();
-  elements.questionList.innerHTML = days
-    .map((day) => {
-      const questions = state.questions.filter((question) => getQuestionDay(question) === day);
-      const collapsed = state.collapsedDays.has(day);
-      return `
-        <section class="day-group" data-day-group="${day}">
-          <button
-            class="day-group-heading"
-            type="button"
-            data-toggle-day-group="${day}"
-            aria-expanded="${!collapsed}"
-            title="点击折叠；也可以把题拖到这里"
-          >
-            <span><strong>第 ${day} 天</strong><small>${questions.length} 道题</small></span>
-            <span class="day-drop-hint">拖题到这里</span>
-            <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-          </button>
-          <div class="day-group-body" ${collapsed ? "hidden" : ""}>
-            ${
-              questions.length
-                ? questions
-                    .map((question) => renderQuestionCard(question, indexById.get(question.id)))
-                    .join("")
-                : '<div class="day-group-empty">暂无题目，可拖动题目到这里</div>'
-            }
-          </div>
-        </section>`;
-    })
-    .join("");
+  elements.questionList.innerHTML = `
+    <section class="simple-question-group" aria-label="已选题目">
+      ${state.questions.map((question, index) => renderQuestionCard(question, index)).join("")}
+    </section>`;
 
   bindQuestionDragging();
   markInlinePreviewDirty();
 }
 
 function moveQuestion(id, direction) {
-  if (state.simpleMode) {
-    const index = state.questions.findIndex((item) => item.id === id);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= state.questions.length) return;
-    [state.questions[index], state.questions[target]] = [state.questions[target], state.questions[index]];
-    renderQuestions();
-    return;
-  }
-
-  const question = state.questions.find((item) => item.id === id);
-  if (!question) return;
-  const day = getQuestionDay(question);
-  const dayIndexes = state.questions
-    .map((item, index) => (getQuestionDay(item) === day ? index : -1))
-    .filter((index) => index >= 0);
-  const localIndex = dayIndexes.indexOf(state.questions.indexOf(question));
-  const targetLocalIndex = localIndex + direction;
-  if (targetLocalIndex < 0 || targetLocalIndex >= dayIndexes.length) return;
-  const from = dayIndexes[localIndex];
-  const target = dayIndexes[targetLocalIndex];
-  [state.questions[from], state.questions[target]] = [state.questions[target], state.questions[from]];
-  renderQuestions();
-}
-
-function moveQuestionToDay(id, day) {
-  const from = state.questions.findIndex((question) => question.id === id);
-  if (from < 0) return;
-  const [question] = state.questions.splice(from, 1);
-  question.day = day;
-  let insertAt = state.questions.length;
-  for (let index = 0; index < state.questions.length; index += 1) {
-    if (getQuestionDay(state.questions[index]) > day) {
-      insertAt = index;
-      break;
-    }
-  }
-  while (insertAt < state.questions.length && getQuestionDay(state.questions[insertAt]) === day) {
-    insertAt += 1;
-  }
-  state.questions.splice(insertAt, 0, question);
-  state.collapsedDays.delete(day);
+  const index = state.questions.findIndex((item) => item.id === id);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= state.questions.length) return;
+  [state.questions[index], state.questions[target]] = [state.questions[target], state.questions[index]];
   renderQuestions();
 }
 
@@ -1113,38 +1038,21 @@ function bindQuestionDragging() {
       const from = state.questions.findIndex((question) => question.id === draggedId);
       if (from < 0) return;
       const [item] = state.questions.splice(from, 1);
-      const targetQuestion = state.questions.find((question) => question.id === targetId);
-      if (!state.simpleMode) item.day = getQuestionDay(targetQuestion);
       const to = state.questions.findIndex((question) => question.id === targetId);
       state.questions.splice(to, 0, item);
       renderQuestions();
     });
   });
-
-  $$(".day-group-heading").forEach((heading) => {
-    heading.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      heading.classList.add("drag-over");
-    });
-    heading.addEventListener("dragleave", () => heading.classList.remove("drag-over"));
-    heading.addEventListener("drop", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      heading.classList.remove("drag-over");
-      if (!draggedId) return;
-      moveQuestionToDay(draggedId, Number(heading.dataset.toggleDayGroup));
-    });
-  });
 }
 
 function getLayoutConfig() {
-  const landscape = elements.paperSize.value === "a4-landscape";
   return {
-    widthMm: landscape ? 297 : 210,
-    heightMm: landscape ? 210 : 297,
+    widthMm: 210,
+    heightMm: 297,
     marginMm: Number(elements.pageMargin.value),
     gapMm: Number(elements.questionGap.value),
     questionScale: Number(elements.questionScale.value) / 100,
+    normalizeTextSize: elements.normalizeTextSize.checked,
     columns: Number(elements.columns.value),
     title: elements.paperTitle.value.trim() || "数学专题练习",
     showNumbers: elements.showNumbers.checked,
@@ -1176,6 +1084,15 @@ async function buildPaperCanvases(scale = 2) {
   const bottomLimit = pageHeight - margin;
   const canvases = [];
   const images = await Promise.all(state.questions.map((question) => imageFromUrl(question.image)));
+  const textRatios = state.questions
+    .map((question) => Number(question.textHeightRatio))
+    .filter((ratio) => Number.isFinite(ratio) && ratio > 0)
+    .sort((a, b) => a - b);
+  const medianTextRatio = textRatios.length
+    ? textRatios.length % 2
+      ? textRatios[Math.floor(textRatios.length / 2)]
+      : (textRatios[textRatios.length / 2 - 1] + textRatios[textRatios.length / 2]) / 2
+    : null;
 
   let canvas;
   let context;
@@ -1214,7 +1131,7 @@ async function buildPaperCanvases(scale = 2) {
     canvases.push(canvas);
   };
 
-  const measureQuestion = (question, image, reservedHeaderHeight = 0) => {
+  const measureQuestion = (question, image) => {
     const numberWidth = config.showNumbers ? 10 * pxPerMm : 0;
     const sizeFactor =
       question.size === "compact" ? 0.78 : question.size === "full" ? 1 : 0.9;
@@ -1223,9 +1140,14 @@ async function buildPaperCanvases(scale = 2) {
       requiredColumns === 2 ? innerWidth : Math.min(columnWidth, columnWidth * sizeFactor);
     const maximumWidth =
       (requiredColumns === 2 ? innerWidth : columnWidth) - numberWidth;
+    const questionTextRatio = Number(question.textHeightRatio);
+    const textNormalization =
+      config.normalizeTextSize && medianTextRatio && Number.isFinite(questionTextRatio) && questionTextRatio > 0
+        ? Math.min(1.6, Math.max(0.65, medianTextRatio / questionTextRatio))
+        : 1;
     let imageWidth = Math.min(
       maximumWidth,
-      (availableWidth - numberWidth) * config.questionScale,
+      (availableWidth - numberWidth) * config.questionScale * textNormalization,
     );
     let imageHeight = imageWidth * (image.height / image.width);
     const sourceHeight = config.showSources ? 5 * pxPerMm : 0;
@@ -1235,7 +1157,7 @@ async function buildPaperCanvases(scale = 2) {
     // answer space continues on following pages instead of shrinking the crop.
     const maxImageHeight = Math.max(
       12 * pxPerMm,
-      bottomLimit - contentTop - reservedHeaderHeight - sourceHeight - gap,
+      bottomLimit - contentTop - sourceHeight - gap,
     );
     if (imageHeight > maxImageHeight) {
       const fit = maxImageHeight / imageHeight;
@@ -1259,11 +1181,7 @@ async function buildPaperCanvases(scale = 2) {
   for (let index = 0; index < state.questions.length; index += 1) {
     const question = state.questions[index];
     const image = images[index];
-    const day = getQuestionDay(question);
-    const previousDay = index > 0 ? getQuestionDay(state.questions[index - 1]) : null;
-    const startsNewDay = !state.simpleMode && (index === 0 || day !== previousDay);
-    const dayHeaderHeight = startsNewDay ? 10 * pxPerMm : 0;
-    const metrics = measureQuestion(question, image, dayHeaderHeight);
+    const metrics = measureQuestion(question, image);
     const {
       numberWidth,
       requiredColumns,
@@ -1292,11 +1210,10 @@ async function buildPaperCanvases(scale = 2) {
         candidateIndex += 1
       ) {
         const candidate = state.questions[candidateIndex];
-        if (!state.simpleMode && getQuestionDay(candidate) !== day) break;
         const candidateMetrics =
           candidateIndex === index
             ? metrics
-            : measureQuestion(candidate, images[candidateIndex], dayHeaderHeight);
+            : measureQuestion(candidate, images[candidateIndex]);
         if (candidateMetrics.answerHeight > 0 || candidateMetrics.requiredColumns !== 1) break;
 
         const candidateWidth = candidateMetrics.numberWidth + candidateMetrics.imageWidth;
@@ -1319,13 +1236,9 @@ async function buildPaperCanvases(scale = 2) {
       }
 
       let rowY = positions[0].y;
-      if (rowY + dayHeaderHeight + rowHeight + gap > bottomLimit) {
+      if (rowY + rowHeight + gap > bottomLimit) {
         newPage();
         rowY = contentTop;
-      }
-      if (startsNewDay) {
-        drawDayHeader(context, day, margin, rowY, innerWidth, pxPerMm);
-        rowY += dayHeaderHeight;
       }
 
       let rowX = margin + Math.max(0, (innerWidth - rowWidth) / 2);
@@ -1350,20 +1263,6 @@ async function buildPaperCanvases(scale = 2) {
       positions[0].y = rowY + rowHeight + gap;
       index += rowItems.length - 1;
       continue;
-    }
-
-    if (startsNewDay) {
-      let headerY =
-        config.columns === 2 ? Math.max(positions[0].y, positions[1].y) : positions[0].y;
-      if (headerY + dayHeaderHeight + questionOnlyHeight > bottomLimit) {
-        newPage();
-        headerY = contentTop;
-      }
-      drawDayHeader(context, day, margin, headerY, innerWidth, pxPerMm);
-      const questionStartY = headerY + dayHeaderHeight;
-      positions.forEach((position) => {
-        position.y = questionStartY;
-      });
     }
 
     let columnIndex = positions[0].y <= positions[positions.length - 1].y ? 0 : positions.length - 1;
@@ -1459,9 +1358,7 @@ async function buildPaperCanvases(scale = 2) {
         imageWidth,
         continuationHeight,
         pxPerMm,
-        state.simpleMode
-          ? `第 ${index + 1} 题答题区（续）`
-          : `第 ${day} 天 · 第 ${index + 1} 题答题区（续）`,
+        `第 ${index + 1} 题答题区（续）`,
       );
       const continuationBottom = contentTop + continuationHeight + gap;
       if (requiredColumns === 2) {
@@ -1529,16 +1426,6 @@ function drawQuestion(
     const answerY = y + imageHeight + (config.showSources ? 5 * pxPerMm : 0) + answerGap;
     drawAnswerArea(context, answerX, answerY, imageWidth, answerHeight, pxPerMm, "答题区");
   }
-}
-
-function drawDayHeader(context, day, x, y, width, pxPerMm) {
-  context.save();
-  context.fillStyle = "#2878f0";
-  context.font = `700 ${Math.round(4.4 * pxPerMm)}px "Noto Sans SC", "Microsoft YaHei", sans-serif`;
-  context.textAlign = "left";
-  context.textBaseline = "top";
-  context.fillText(`第 ${day} 天作业`, x, y);
-  context.restore();
 }
 
 function drawAnswerArea(context, x, y, width, height, pxPerMm, label) {
@@ -1762,11 +1649,7 @@ function clearAll() {
   state.questions = [];
   state.activeDocumentId = null;
   state.activePage = 1;
-  state.activeDay = 1;
-  state.simpleMode = false;
-  elements.simpleModeToggle.checked = false;
   state.defaultQuestionSize = "standard";
-  state.collapsedDays.clear();
   clearSelection();
   renderDocumentList();
   renderQuestions();
@@ -1990,33 +1873,11 @@ elements.viewerScrollRail.addEventListener("keydown", (event) => {
 
 elements.cancelSelectionButton.addEventListener("click", clearSelection);
 elements.addQuestionButton.addEventListener("click", addSelectedQuestion);
-elements.simpleModeToggle.addEventListener("change", () => {
-  state.simpleMode = elements.simpleModeToggle.checked;
-  renderQuestions();
-  markInlinePreviewDirty();
-  toast(
-    state.simpleMode
-      ? "已切换为简洁复习：不再显示按天分组。"
-      : "已切换为分天作业：恢复原有天数分组。",
-  );
-});
 elements.bulkQuestionSizeButtons.forEach((button) => {
   button.addEventListener("click", () => applyQuestionSizeToAll(button.dataset.bulkQuestionSize));
 });
 
 elements.questionList.addEventListener("click", (event) => {
-  const dayToggle = event.target.closest("[data-toggle-day-group]");
-  if (dayToggle) {
-    const day = Number(dayToggle.dataset.toggleDayGroup);
-    if (state.collapsedDays.has(day)) {
-      state.collapsedDays.delete(day);
-    } else {
-      state.collapsedDays.add(day);
-    }
-    renderQuestions();
-    return;
-  }
-
   const up = event.target.closest("[data-move-up]");
   const down = event.target.closest("[data-move-down]");
   const duplicate = event.target.closest("[data-duplicate]");
@@ -2066,30 +1927,6 @@ elements.questionList.addEventListener("change", (event) => {
   answerInput.value = getQuestionAnswerSpaceMm(question);
 });
 
-elements.dayManagerToggle.addEventListener("click", () => {
-  const expanded = elements.dayManagerToggle.getAttribute("aria-expanded") === "true";
-  elements.dayManagerToggle.setAttribute("aria-expanded", String(!expanded));
-  elements.dayManagerBody.hidden = expanded;
-});
-
-elements.dayTabList.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-select-active-day]");
-  if (!button) return;
-  state.activeDay = Number(button.dataset.selectActiveDay);
-  renderDayManager();
-});
-
-elements.activeDayInput.addEventListener("change", () => {
-  const value = Number(elements.activeDayInput.value);
-  state.activeDay = Math.min(365, Math.max(1, Math.round(value) || 1));
-  renderDayManager();
-});
-
-elements.addDayButton.addEventListener("click", () => {
-  state.activeDay = Math.min(365, Math.max(...getKnownDays()) + 1);
-  renderDayManager();
-});
-
 elements.settingsToggle.addEventListener("click", () => {
   const expanded = elements.settingsToggle.getAttribute("aria-expanded") === "true";
   elements.settingsToggle.setAttribute("aria-expanded", String(!expanded));
@@ -2111,8 +1948,8 @@ elements.questionScale.addEventListener("input", () => {
 
 [
   elements.paperTitle,
-  elements.paperSize,
   elements.columns,
+  elements.normalizeTextSize,
   elements.showNumbers,
   elements.showSources,
 ].forEach((control) => {
