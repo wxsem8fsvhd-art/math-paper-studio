@@ -1,4 +1,11 @@
 import * as pdfjsLib from "./vendor/pdf.min.mjs";
+import {
+  clearRecentWork,
+  readRecentWork,
+  removeRecentDocument,
+  saveRecentDocument,
+  saveRecentSession,
+} from "./recovery.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.mjs";
 
@@ -92,6 +99,8 @@ const state = {
   inlinePreviewToken: 0,
   paneDrag: null,
   lastLayout: null,
+  recoveryReady: false,
+  recoverySavedAt: null,
 };
 
 const thumbnailState = {
@@ -130,6 +139,218 @@ function toast(message, type = "success") {
 function setSaveStatus(text, busy = false) {
   elements.saveStatus.lastChild.textContent = ` ${text}`;
   elements.saveStatus.querySelector("i").style.background = busy ? "#f0b857" : "#54c88a";
+}
+
+let recoveryTimer = null;
+let recoveryQueue = Promise.resolve();
+let suppressRecoverySave = false;
+
+function enqueueRecovery(operation) {
+  const task = recoveryQueue.then(operation);
+  recoveryQueue = task.catch(() => {});
+  return task;
+}
+
+function currentRecoverySession() {
+  return {
+    version: 1,
+    savedAt: Date.now(),
+    documents: state.documents.map(({ id, name, size, pages, sourceCached }) => ({
+      id,
+      name,
+      size,
+      pages,
+      sourceCached: Boolean(sourceCached),
+    })),
+    activeDocumentId: state.activeDocumentId,
+    activePage: state.activePage,
+    zoom: state.zoom,
+    defaultQuestionSize: state.defaultQuestionSize,
+    questions: state.questions.map((question) => ({
+      id: question.id,
+      image: question.image,
+      width: question.width,
+      height: question.height,
+      sourceName: question.sourceName,
+      sourcePage: question.sourcePage,
+      size: question.size,
+      answerSpaceMm: getQuestionAnswerSpaceMm(question),
+      textHeightRatio: question.textHeightRatio,
+    })),
+    settings: {
+      title: elements.paperTitle.value,
+      columns: elements.columns.value,
+      margin: elements.pageMargin.value,
+      gap: elements.questionGap.value,
+      scale: elements.questionScale.value,
+      normalizeTextSize: elements.normalizeTextSize.checked,
+      showNumbers: elements.showNumbers.checked,
+      showSources: elements.showSources.checked,
+    },
+  };
+}
+
+function flushRecoverySave() {
+  window.clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  if (!state.recoveryReady || suppressRecoverySave) return Promise.resolve();
+  const snapshot = currentRecoverySession();
+  return enqueueRecovery(async () => {
+    try {
+      await saveRecentSession(snapshot);
+      state.recoverySavedAt = snapshot.savedAt;
+      const missingSources = state.documents.filter((document) => !document.sourceCached).length;
+      setSaveStatus(
+        missingSources ? `已暂存题目 · ${missingSources} 份 PDF 需重传` : "最近进度已保存 · 仅本机",
+      );
+    } catch (error) {
+      if (error?.name === "QuotaExceededError") {
+        const cachedDocuments = state.documents
+          .filter((document) => document.sourceCached)
+          .sort((first, second) => second.size - first.size);
+        for (const document of cachedDocuments) {
+          try {
+            await removeRecentDocument(document.id);
+            document.sourceCached = false;
+            const savedDocument = snapshot.documents.find((item) => item.id === document.id);
+            if (savedDocument) savedDocument.sourceCached = false;
+            await saveRecentSession(snapshot);
+            state.recoverySavedAt = snapshot.savedAt;
+            const missingSources = state.documents.filter((item) => !item.sourceCached).length;
+            setSaveStatus(`已暂存题目 · ${missingSources} 份 PDF 需重传`);
+            toast("本机存储空间不足，已保留选题记录。重开后请重新上传提示的原 PDF。", "error");
+            return;
+          } catch (retryError) {
+            error = retryError;
+            if (error?.name !== "QuotaExceededError") break;
+          }
+        }
+      }
+      console.warn("无法自动保存最近进度", error);
+      setSaveStatus("自动保存失败 · 请导出 PDF", true);
+    }
+  });
+}
+
+function scheduleRecoverySave() {
+  if (!state.recoveryReady || suppressRecoverySave) return;
+  window.clearTimeout(recoveryTimer);
+  recoveryTimer = window.setTimeout(flushRecoverySave, 250);
+}
+
+async function cacheDocumentForRecovery(document, file) {
+  if (!state.recoveryReady) return;
+  setSaveStatus(`正在暂存 ${document.name}`, true);
+  try {
+    await enqueueRecovery(() =>
+      saveRecentDocument({ id: document.id, name: document.name, size: document.size, file }),
+    );
+    document.sourceCached = true;
+  } catch (error) {
+    document.sourceCached = false;
+    console.warn(`无法暂存 PDF：${document.name}`, error);
+    toast(`「${document.name}」未能暂存；已选题目仍会保存，重开后请重新上传原 PDF。`, "error");
+  }
+}
+
+async function restoreRecentWorkspace() {
+  elements.fileInput.disabled = true;
+  setSaveStatus("正在检查最近进度", true);
+  let available = true;
+  try {
+    const { session, documents } = await readRecentWork();
+    if (!session || session.version !== 1) {
+      setSaveStatus("自动保存已就绪 · 仅本机");
+      return;
+    }
+
+    const settings = session.settings || {};
+    if (typeof settings.title === "string") elements.paperTitle.value = settings.title;
+    if (["1", "2"].includes(settings.columns)) elements.columns.value = settings.columns;
+    if (settings.margin != null) elements.pageMargin.value = settings.margin;
+    if (settings.gap != null) elements.questionGap.value = settings.gap;
+    if (settings.scale != null) elements.questionScale.value = settings.scale;
+    if (typeof settings.normalizeTextSize === "boolean") {
+      elements.normalizeTextSize.checked = settings.normalizeTextSize;
+    }
+    if (typeof settings.showNumbers === "boolean") elements.showNumbers.checked = settings.showNumbers;
+    if (typeof settings.showSources === "boolean") elements.showSources.checked = settings.showSources;
+    elements.marginOutput.textContent = `${elements.pageMargin.value} mm`;
+    elements.gapOutput.textContent = `${elements.questionGap.value} mm`;
+    elements.questionScaleOutput.textContent = `${elements.questionScale.value}%`;
+
+    state.questions = Array.isArray(session.questions)
+      ? session.questions.filter(
+          (question) =>
+            typeof question.id === "string" &&
+            typeof question.image === "string" &&
+            question.image.startsWith("data:image/"),
+        )
+      : [];
+    state.defaultQuestionSize = QUESTION_SIZE_LABELS[session.defaultQuestionSize]
+      ? session.defaultQuestionSize
+      : "standard";
+    state.zoom = Number.isFinite(session.zoom) ? Math.min(1.5, Math.max(0.7, session.zoom)) : 1;
+    const storedDocuments = new Map(documents.map((document) => [document.id, document]));
+    let missingSources = 0;
+
+    for (const metadata of session.documents || []) {
+      const stored = storedDocuments.get(metadata.id);
+      if (!stored?.file) {
+        missingSources += 1;
+        continue;
+      }
+      const objectUrl = URL.createObjectURL(stored.file);
+      try {
+        const pdf = await pdfjsLib.getDocument({
+          url: objectUrl,
+          disableAutoFetch: true,
+          rangeChunkSize: 1024 * 1024,
+        }).promise;
+        state.documents.push({
+          id: metadata.id,
+          name: metadata.name,
+          size: metadata.size,
+          objectUrl,
+          pdf,
+          pages: pdf.numPages,
+          sourceCached: true,
+          thumbnailCache: new Map(),
+        });
+      } catch (error) {
+        URL.revokeObjectURL(objectUrl);
+        missingSources += 1;
+        console.warn(`无法恢复 PDF：${metadata.name}`, error);
+      }
+    }
+
+    state.activeDocumentId = state.documents.some((document) => document.id === session.activeDocumentId)
+      ? session.activeDocumentId
+      : state.documents[0]?.id || null;
+    const activeDocument = getActiveDocument();
+    state.activePage = activeDocument
+      ? Math.min(activeDocument.pages, Math.max(1, Number(session.activePage) || 1))
+      : 1;
+    state.recoverySavedAt = session.savedAt || null;
+    renderDocumentList();
+    renderQuestions();
+    await renderActivePage();
+    if (state.documents.length) setUploadSectionCollapsed(true);
+    if (state.questions.length || state.documents.length || missingSources) {
+      toast(`已恢复最近进度：${state.questions.length} 道题${missingSources ? `；${missingSources} 份 PDF 需重新上传` : ""}。`);
+    }
+    setSaveStatus(
+      missingSources ? `已恢复题目 · ${missingSources} 份 PDF 需重传` : "最近进度已恢复 · 仅本机",
+    );
+  } catch (error) {
+    available = false;
+    console.warn("无法读取最近进度", error);
+    setSaveStatus("本机暂存不可用", true);
+    toast("浏览器未能读取本机暂存；当前仍可正常选题和导出。", "error");
+  } finally {
+    state.recoveryReady = available;
+    elements.fileInput.disabled = false;
+  }
 }
 
 function setUploadSectionCollapsed(collapsed) {
@@ -193,15 +414,18 @@ async function handleFiles(files) {
         setSaveStatus(`正在读取 ${file.name}${percent}`, true);
       };
       const pdf = await loadingTask.promise;
-      state.documents.push({
+      const document = {
         id: uid(),
         name: file.name,
         size: file.size,
         objectUrl,
         pdf,
         pages: pdf.numPages,
+        sourceCached: false,
         thumbnailCache: new Map(),
-      });
+      };
+      state.documents.push(document);
+      await cacheDocumentForRecovery(document, file);
     } catch (error) {
       URL.revokeObjectURL(objectUrl);
       console.error(error);
@@ -217,7 +441,8 @@ async function handleFiles(files) {
   renderDocumentList();
   await renderActivePage();
   if (state.documents.length) setUploadSectionCollapsed(true);
-  setSaveStatus("仅在本机处理");
+  scheduleRecoverySave();
+  if (!state.recoveryReady) setSaveStatus("仅在本机处理");
   if (pdfFiles.length > 1) toast(`已加入 ${pdfFiles.length} 份试卷。`);
 }
 
@@ -562,6 +787,7 @@ function updateActivePageFromScroll() {
     elements.pageCounter.textContent = `${pageNumber} / ${document.pages}`;
     updatePageControls();
     updateActiveThumbnail(false);
+    scheduleRecoverySave();
   }
   cleanupContinuousPages();
 }
@@ -578,6 +804,7 @@ function scrollToPage(pageNumber, behavior = "smooth") {
   elements.pageCounter.textContent = `${targetPage} / ${document.pages}`;
   updatePageControls();
   updateActiveThumbnail(true);
+  scheduleRecoverySave();
   elements.viewerStage.scrollTo({
     top: Math.max(0, shell.offsetTop - 20),
     behavior,
@@ -1470,6 +1697,7 @@ let inlinePreviewTimer = null;
 
 function markInlinePreviewDirty() {
   state.inlinePreviewDirty = true;
+  scheduleRecoverySave();
   if (state.composeView !== "preview") return;
   window.clearTimeout(inlinePreviewTimer);
   inlinePreviewTimer = window.setTimeout(renderInlinePreview, 180);
@@ -1658,6 +1886,12 @@ function removeDocument(id) {
   }
   renderDocumentList();
   renderActivePage();
+  if (state.recoveryReady) {
+    enqueueRecovery(() => removeRecentDocument(id)).catch((error) => {
+      console.warn("无法移除本机暂存的 PDF", error);
+    });
+    scheduleRecoverySave();
+  }
   if (!state.documents.length) setUploadSectionCollapsed(false);
   if (document) toast(`已移除「${document.name}」。`);
 }
@@ -1672,6 +1906,9 @@ function clearAll() {
   if (!state.documents.length && !state.questions.length) return;
   const confirmed = window.confirm("清空全部试卷和已选题目？这个操作无法撤销。");
   if (!confirmed) return;
+  window.clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  suppressRecoverySave = true;
   state.documents.forEach(disposeDocument);
   state.documents = [];
   state.questions = [];
@@ -1683,6 +1920,15 @@ function clearAll() {
   renderQuestions();
   renderActivePage();
   setUploadSectionCollapsed(false);
+  suppressRecoverySave = false;
+  if (state.recoveryReady) {
+    enqueueRecovery(() => clearRecentWork())
+      .then(() => setSaveStatus("自动保存已就绪 · 仅本机"))
+      .catch((error) => {
+        console.warn("无法清除本机暂存", error);
+        setSaveStatus("本机暂存清除失败", true);
+      });
+  }
   toast("工作台已清空。");
 }
 
@@ -1737,6 +1983,7 @@ elements.documentList.addEventListener("click", async (event) => {
     state.activePage = 1;
     renderDocumentList();
     await renderActivePage();
+    scheduleRecoverySave();
   }
 });
 
@@ -2026,10 +2273,14 @@ window.addEventListener("resize", () => {
     if (getActiveDocument() && !state.paneDrag) renderActivePage();
   }, 180);
 });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && recoveryTimer) flushRecoverySave();
+});
 
 setupPaneResizing();
 renderQuestions();
 updatePageControls();
+restoreRecentWorkspace();
 
 // Exposed by convention to make browser smoke tests and classroom IT support easier.
 window.__paperStudioDebug = state;
