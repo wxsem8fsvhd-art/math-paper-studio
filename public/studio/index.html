@@ -12,7 +12,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2315243b'/%3E%3Ctext x='32' y='45' text-anchor='middle' font-size='42' fill='white'%3E%E2%88%91%3C/text%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="./styles.css?v=22" />
+    <link rel="stylesheet" href="./styles.css?v=23" />
   </head>
   <body>
     <header class="topbar">
@@ -42,19 +42,18 @@
             <span class="eyebrow">01 · 素材</span>
             <h1>选择试卷</h1>
           </div>
-          <label
-            class="icon-button"
+          <button
+            class="button button-quiet add-pdf-button"
             id="addFilesButton"
-            for="fileInput"
-            role="button"
-            tabindex="0"
-            title="添加 PDF"
+            type="button"
+            title="继续添加 PDF，可同时选择多个文件"
             aria-label="添加 PDF"
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 5v14M5 12h14" />
             </svg>
-          </label>
+            添加 PDF
+          </button>
         </div>
 
         <input
@@ -78,15 +77,15 @@
             <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
           </button>
           <div id="uploadSectionBody">
-            <label class="upload-zone" id="uploadZone" for="fileInput" role="button" tabindex="0">
+            <button class="upload-zone" id="uploadZone" type="button">
               <span class="upload-icon">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 16V4m0 0 4 4m-4-4-4 4M4 15v5h16v-5" />
                 </svg>
               </span>
               <strong>上传 PDF 试卷</strong>
-              <small>支持多个文件 · 不上传试卷</small>
-            </label>
+              <small>可多选文件、选择页码 · 仅在本机处理</small>
+            </button>
           </div>
         </section>
 
@@ -159,13 +158,11 @@
             </div>
             <h3>先放入一份试卷</h3>
             <p>打开任意一页，用鼠标拖框选中完整题目；题号、图形和公式都会原样保留。</p>
-            <label
+            <button
               class="button button-primary"
               id="emptyUploadButton"
-              for="fileInput"
-              role="button"
-              tabindex="0"
-            >选择 PDF</label>
+              type="button"
+            >选择 PDF</button>
           </div>
           <div class="canvas-wrap" id="canvasWrap" hidden>
             <div class="continuous-pages" id="continuousPages"></div>
@@ -352,6 +349,30 @@
       </aside>
     </main>
 
+    <dialog class="import-dialog" id="importDialog" aria-labelledby="importTitle" aria-describedby="importDescription">
+      <form id="importForm">
+        <header class="import-header">
+          <div>
+            <span class="eyebrow">添加素材</span>
+            <h2 id="importTitle">选择要载入的页码</h2>
+          </div>
+          <button class="icon-button" id="closeImportButton" type="button" aria-label="取消添加">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        </header>
+        <p class="import-description" id="importDescription">每份 PDF 可分别选择页码范围。只显示和渲染所选页面，题目来源保留原页码。</p>
+        <div class="import-file-list" id="importFileList"></div>
+        <p class="import-error" id="importError" role="alert" hidden></p>
+        <footer class="import-footer">
+          <span id="importSummary" aria-live="polite">正在读取文件信息…</span>
+          <div>
+            <button class="button button-quiet" id="cancelImportButton" type="button">取消</button>
+            <button class="button button-primary" id="confirmImportButton" type="submit" disabled>加入素材</button>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+
     <div class="modal" id="previewModal" hidden>
       <div class="modal-backdrop" data-close-modal></div>
       <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
@@ -384,6 +405,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
     <script src="./vendor/jspdf.umd.min.js"></script>
-    <script type="module" src="./app.js?v=22"></script>
+    <script type="module" src="./app.js?v=23"></script>
   </body>
 </html>

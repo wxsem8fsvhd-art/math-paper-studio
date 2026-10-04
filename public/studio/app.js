@@ -20,6 +20,15 @@ const elements = {
   uploadSectionBody: $("#uploadSectionBody"),
   uploadSectionHint: $("#uploadSectionHint"),
   emptyUploadButton: $("#emptyUploadButton"),
+  sourcePanel: $(".source-panel"),
+  importDialog: $("#importDialog"),
+  importForm: $("#importForm"),
+  importFileList: $("#importFileList"),
+  importSummary: $("#importSummary"),
+  importError: $("#importError"),
+  closeImportButton: $("#closeImportButton"),
+  cancelImportButton: $("#cancelImportButton"),
+  confirmImportButton: $("#confirmImportButton"),
   documentList: $("#documentList"),
   workspace: $(".workspace"),
   paneSplitters: $$("[data-pane-splitter]"),
@@ -123,6 +132,8 @@ const continuousState = {
 
 const MAX_CONTINUOUS_WORKERS = 2;
 
+const importState = { batch: null, queue: [] };
+
 const uid = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 function toast(message, type = "success") {
@@ -155,11 +166,13 @@ function currentRecoverySession() {
   return {
     version: 1,
     savedAt: Date.now(),
-    documents: state.documents.map(({ id, name, size, pages, sourceCached }) => ({
+    documents: state.documents.map(({ id, name, size, pages, pageStart, pageEnd, sourceCached }) => ({
       id,
       name,
       size,
       pages,
+      pageStart,
+      pageEnd,
       sourceCached: Boolean(sourceCached),
     })),
     activeDocumentId: state.activeDocumentId,
@@ -307,6 +320,7 @@ async function restoreRecentWorkspace() {
           disableAutoFetch: true,
           rangeChunkSize: 1024 * 1024,
         }).promise;
+        const range = getDocumentRange({ ...metadata, pages: pdf.numPages });
         state.documents.push({
           id: metadata.id,
           name: metadata.name,
@@ -314,6 +328,8 @@ async function restoreRecentWorkspace() {
           objectUrl,
           pdf,
           pages: pdf.numPages,
+          pageStart: range.start,
+          pageEnd: range.end,
           sourceCached: true,
           thumbnailCache: new Map(),
         });
@@ -328,8 +344,9 @@ async function restoreRecentWorkspace() {
       ? session.activeDocumentId
       : state.documents[0]?.id || null;
     const activeDocument = getActiveDocument();
+    const activeRange = activeDocument && getDocumentRange(activeDocument);
     state.activePage = activeDocument
-      ? Math.min(activeDocument.pages, Math.max(1, Number(session.activePage) || 1))
+      ? Math.min(activeRange.end, Math.max(activeRange.start, Number(session.activePage) || activeRange.start))
       : 1;
     state.recoverySavedAt = session.savedAt || null;
     renderDocumentList();
@@ -364,6 +381,12 @@ function getActiveDocument() {
   return state.documents.find((document) => document.id === state.activeDocumentId);
 }
 
+function getDocumentRange(document) {
+  const start = Math.min(document.pages, Math.max(1, Number(document.pageStart) || 1));
+  const end = Math.min(document.pages, Math.max(start, Number(document.pageEnd) || document.pages));
+  return { start, end, count: end - start + 1 };
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -390,7 +413,8 @@ function getQuestionAnswerSpaceMm(question) {
   }[question.answerSpace || "none"];
 }
 
-async function handleFiles(files) {
+function handleFiles(files) {
+  if (!files.length) return;
   const pdfFiles = [...files].filter(
     (file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"),
   );
@@ -400,50 +424,177 @@ async function handleFiles(files) {
     return;
   }
 
-  setSaveStatus("正在读取 PDF", true);
-  for (const file of pdfFiles) {
-    const objectUrl = URL.createObjectURL(file);
+  importState.queue.push(pdfFiles);
+  if (!importState.batch) startNextImportBatch();
+}
+
+function renderImportFile(record) {
+  const row = elements.importFileList.querySelector(`[data-import-file="${record.id}"]`);
+  const heading = `<strong>${escapeHtml(record.file.name)}</strong>`;
+  if (record.status !== "ready") {
+    row.innerHTML = `${heading}<span class="import-file-meta">${record.status === "failed" ? "无法读取，文件可能已加密或损坏。本次将跳过此文件。" : "正在读取页数…"}</span>`;
+    return;
+  }
+  row.innerHTML = `${heading}
+    <span class="import-file-meta">共 ${record.pdf.numPages} 页 · ${formatFileSize(record.file.size)}</span>
+    <div class="import-page-mode" role="group" aria-label="${escapeHtml(record.file.name)}的载入范围">
+      <label><input type="radio" name="pages-${record.id}" value="all" checked />全部页</label>
+      <label><input type="radio" name="pages-${record.id}" value="range" />指定页码</label>
+    </div>
+    <div class="import-page-range" hidden>
+      <label>从第 <input type="number" data-range-start min="1" max="${record.pdf.numPages}" step="1" value="1" required disabled aria-label="起始页：${escapeHtml(record.file.name)}" /> 页</label>
+      <span>到</span>
+      <label>第 <input type="number" data-range-end min="1" max="${record.pdf.numPages}" step="1" value="${record.pdf.numPages}" required disabled aria-label="结束页：${escapeHtml(record.file.name)}" /> 页</label>
+    </div>`;
+}
+
+function readImportRange(record) {
+  const row = elements.importFileList.querySelector(`[data-import-file="${record.id}"]`);
+  if (row.querySelector('input[type="radio"]:checked').value === "all") {
+    return { start: 1, end: record.pdf.numPages };
+  }
+  return {
+    start: row.querySelector("[data-range-start]").valueAsNumber,
+    end: row.querySelector("[data-range-end]").valueAsNumber,
+  };
+}
+
+function updateImportSummary() {
+  const batch = importState.batch;
+  if (!batch) return;
+  const pending = batch.records.filter((record) => record.status === "loading").length;
+  const ready = batch.records.filter((record) => record.status === "ready");
+  elements.confirmImportButton.disabled = batch.committing || Boolean(pending) || !ready.length;
+  if (pending) {
+    elements.importSummary.textContent = `正在读取文件信息 · ${ready.length} / ${batch.records.length} 份就绪`;
+    return;
+  }
+  let count = 0;
+  let valid = true;
+  ready.forEach((record) => {
+    const { start, end } = readImportRange(record);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end > record.pdf.numPages || start > end) {
+      valid = false;
+    } else count += end - start + 1;
+  });
+  const skipped = batch.records.length - ready.length;
+  elements.importSummary.textContent = valid
+    ? `将加入 ${ready.length} 份文件 · ${count} 页${skipped ? `（跳过 ${skipped} 份）` : ""}`
+    : "请检查起始页和结束页";
+}
+
+async function startNextImportBatch() {
+  const files = importState.queue.shift();
+  if (!files) return;
+  const batch = {
+    committing: false,
+    records: files.map((file) => ({ id: uid(), file, status: "loading" })),
+    previousFocus: window.document.activeElement,
+  };
+  importState.batch = batch;
+  elements.importFileList.innerHTML = batch.records
+    .map((record) => `<section class="import-file" data-import-file="${record.id}"></section>`)
+    .join("");
+  batch.records.forEach(renderImportFile);
+  elements.importError.hidden = true;
+  elements.closeImportButton.disabled = false;
+  elements.cancelImportButton.disabled = false;
+  elements.confirmImportButton.textContent = "加入素材";
+  updateImportSummary();
+  elements.importDialog.showModal();
+  for (const record of batch.records) {
+    if (importState.batch !== batch) return;
+    record.objectUrl = URL.createObjectURL(record.file);
     try {
-      const loadingTask = pdfjsLib.getDocument({
-        url: objectUrl,
+      record.loadingTask = pdfjsLib.getDocument({
+        url: record.objectUrl,
         disableAutoFetch: true,
         rangeChunkSize: 1024 * 1024,
       });
-      loadingTask.onProgress = ({ loaded, total }) => {
-        const percent = total ? ` ${Math.min(100, Math.round((loaded / total) * 100))}%` : "";
-        setSaveStatus(`正在读取 ${file.name}${percent}`, true);
-      };
-      const pdf = await loadingTask.promise;
-      const document = {
-        id: uid(),
-        name: file.name,
-        size: file.size,
-        objectUrl,
-        pdf,
-        pages: pdf.numPages,
-        sourceCached: false,
-        thumbnailCache: new Map(),
-      };
-      state.documents.push(document);
-      await cacheDocumentForRecovery(document, file);
+      record.pdf = await record.loadingTask.promise;
+      if (importState.batch !== batch) return;
+      record.status = "ready";
     } catch (error) {
-      URL.revokeObjectURL(objectUrl);
-      console.error(error);
-      toast(`无法读取「${file.name}」，文件可能已加密或损坏。`, "error");
+      if (importState.batch !== batch) return;
+      record.status = "failed";
+      disposeImportFile(record);
+      console.warn(`无法读取 PDF：${record.file.name}`, error);
+    }
+    renderImportFile(record);
+    updateImportSummary();
+  }
+}
+
+function disposeImportFile(record) {
+  const cleanup = record.pdf ? record.pdf.destroy() : record.loadingTask?.destroy();
+  cleanup?.catch((error) => console.warn("PDF cleanup failed", error));
+  if (record.objectUrl) URL.revokeObjectURL(record.objectUrl);
+}
+
+function finishImportBatch() {
+  const previousFocus = importState.batch?.previousFocus;
+  importState.batch = null;
+  elements.importDialog.close();
+  if (importState.queue.length) startNextImportBatch();
+  else if (previousFocus?.isConnected && !previousFocus.hidden) previousFocus.focus();
+}
+
+function cancelImport() {
+  const batch = importState.batch;
+  if (!batch || batch.committing) return;
+  batch.records.forEach(disposeImportFile);
+  finishImportBatch();
+}
+
+async function confirmImport(event) {
+  event.preventDefault();
+  const batch = importState.batch;
+  if (!batch || batch.committing || elements.confirmImportButton.disabled) return;
+  const ready = batch.records.filter((record) => record.status === "ready");
+  for (const record of ready) {
+    const { start, end } = readImportRange(record);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end > record.pdf.numPages || start > end) {
+      elements.importError.textContent = `「${record.file.name}」的页码需在 1–${record.pdf.numPages} 之间，起始页不能大于结束页。`;
+      elements.importError.hidden = false;
+      return;
     }
   }
 
-  if (!state.activeDocumentId && state.documents.length) {
-    state.activeDocumentId = state.documents[0].id;
-    state.activePage = 1;
-  }
-
+  batch.committing = true;
+  elements.confirmImportButton.disabled = true;
+  elements.closeImportButton.disabled = true;
+  elements.cancelImportButton.disabled = true;
+  elements.confirmImportButton.textContent = "正在加入…";
+  const added = ready.map((record) => {
+    const range = readImportRange(record);
+    const document = {
+      id: record.id,
+      name: record.file.name,
+      size: record.file.size,
+      objectUrl: record.objectUrl,
+      pdf: record.pdf,
+      pages: record.pdf.numPages,
+      pageStart: range.start,
+      pageEnd: range.end,
+      sourceCached: false,
+      thumbnailCache: new Map(),
+    };
+    state.documents.push(document);
+    return { document, file: record.file };
+  });
+  state.activeDocumentId = added[0].document.id;
+  state.activePage = added[0].document.pageStart;
   renderDocumentList();
   await renderActivePage();
-  if (state.documents.length) setUploadSectionCollapsed(true);
-  scheduleRecoverySave();
-  if (!state.recoveryReady) setSaveStatus("仅在本机处理");
-  if (pdfFiles.length > 1) toast(`已加入 ${pdfFiles.length} 份试卷。`);
+  setUploadSectionCollapsed(true);
+  finishImportBatch();
+  // Save the worksheet first; PDF caching must not block adding more files.
+  flushRecoverySave();
+  added.forEach(({ document, file }) => {
+    cacheDocumentForRecovery(document, file).then(scheduleRecoverySave);
+  });
+  const pageCount = added.reduce((count, { document }) => count + getDocumentRange(document).count, 0);
+  toast(`已加入 ${added.length} 份文件，共 ${pageCount} 页。可继续点击「添加 PDF」。`);
 }
 
 function renderDocumentList() {
@@ -456,7 +607,7 @@ function renderDocumentList() {
     return;
   }
 
-  elements.documentList.innerHTML = state.documents
+  const documentButtons = state.documents
     .map(
       (document) => `
         <div class="document-item ${document.id === state.activeDocumentId ? "active" : ""}" data-document-id="${document.id}">
@@ -464,30 +615,34 @@ function renderDocumentList() {
             <span class="pdf-icon">PDF</span>
             <span class="document-name">
               <strong title="${escapeHtml(document.name)}">${escapeHtml(document.name)}</strong>
-              <small>${document.pages} 页 · ${formatFileSize(document.size)}</small>
+              <small>${getDocumentRange(document).count === document.pages ? `${document.pages} 页` : `第 ${document.pageStart}–${document.pageEnd} 页 · ${getDocumentRange(document).count} 页`} · ${formatFileSize(document.size)}</small>
             </span>
             <span class="document-remove" role="button" tabindex="0" data-remove-document="${document.id}" title="移除">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
             </span>
           </button>
-          ${
-            document.id === state.activeDocumentId
-              ? `<div class="page-strip">${Array.from({ length: document.pages }, (_, index) => {
-                  const page = index + 1;
-                  const cachedThumbnail = document.thumbnailCache.get(page);
-                  return `<button class="page-thumb ${page === state.activePage ? "active" : ""}" type="button" data-page="${page}" title="第 ${page} 页">
-                    <span class="thumb-surface" data-thumb-page="${page}">${
-                      cachedThumbnail
-                        ? `<img src="${cachedThumbnail}" alt="" />`
-                        : `<i class="thumb-placeholder" aria-hidden="true"></i>`
-                    }</span><span>${page}</span>
-                  </button>`;
-                }).join("")}</div>`
-              : ""
-          }
         </div>`,
     )
     .join("");
+
+  const activeDocument = getActiveDocument();
+  const range = getDocumentRange(activeDocument);
+  const thumbnails = Array.from({ length: range.count }, (_, index) => {
+    const page = range.start + index;
+    const cached = activeDocument.thumbnailCache.get(page);
+    return `<button class="page-thumb ${page === state.activePage ? "active" : ""}" type="button" data-page="${page}" title="原文件第 ${page} 页">
+      <span class="thumb-surface" data-thumb-page="${page}">${cached
+        ? `<img src="${cached}" alt="" />`
+        : '<i class="thumb-placeholder" aria-hidden="true"></i>'
+      }</span><span>${page}</span>
+    </button>`;
+  }).join("");
+  elements.documentList.innerHTML = `
+    <div class="source-documents" aria-label="已加入的 PDF 文件">${documentButtons}</div>
+    <div class="source-pages">
+      <div class="source-pages-heading">当前文件 · 第 ${range.start}–${range.end} 页（${range.count} 页）</div>
+      <div class="page-strip">${thumbnails}</div>
+    </div>`;
 
   observeVisibleThumbnails();
 }
@@ -508,7 +663,7 @@ function observeVisibleThumbnails() {
       });
     },
     {
-      root: elements.documentList,
+      root: elements.documentList.querySelector(".source-pages"),
       rootMargin: "360px 0px",
     },
   );
@@ -609,7 +764,8 @@ async function renderActivePage() {
   updatePageControls();
 
   try {
-    const firstPage = await document.pdf.getPage(1);
+    const range = getDocumentRange(document);
+    const firstPage = await document.pdf.getPage(range.start);
     if (token !== state.renderToken) return;
     const baseViewport = firstPage.getViewport({ scale: 1 });
     continuousState.baseAspectRatio = baseViewport.width / baseViewport.height;
@@ -618,7 +774,7 @@ async function renderActivePage() {
     const generation = continuousState.generation;
 
     const fragment = window.document.createDocumentFragment();
-    for (let pageNumber = 1; pageNumber <= document.pages; pageNumber += 1) {
+    for (let pageNumber = range.start; pageNumber <= range.end; pageNumber += 1) {
       const shell = window.document.createElement("section");
       shell.className = "continuous-page";
       shell.dataset.continuousPage = String(pageNumber);
@@ -795,7 +951,8 @@ function updateActivePageFromScroll() {
 function scrollToPage(pageNumber, behavior = "smooth") {
   const document = getActiveDocument();
   if (!document) return;
-  const targetPage = Math.min(document.pages, Math.max(1, pageNumber));
+  const range = getDocumentRange(document);
+  const targetPage = Math.min(range.end, Math.max(range.start, pageNumber));
   const shell = elements.continuousPages.querySelector(
     `[data-continuous-page="${targetPage}"]`,
   );
@@ -870,8 +1027,9 @@ function setupPaneResizing() {
 function updatePageControls() {
   const document = getActiveDocument();
   const disabled = !document;
-  elements.prevPageButton.disabled = disabled || state.activePage <= 1;
-  elements.nextPageButton.disabled = disabled || state.activePage >= document.pages;
+  const range = document && getDocumentRange(document);
+  elements.prevPageButton.disabled = disabled || state.activePage <= range.start;
+  elements.nextPageButton.disabled = disabled || state.activePage >= range.end;
   elements.scrollUpButton.disabled = disabled;
   elements.scrollDownButton.disabled = disabled;
   elements.zoomOutButton.disabled = disabled || state.zoom <= 0.7;
@@ -1882,7 +2040,7 @@ function removeDocument(id) {
   state.documents = state.documents.filter((item) => item.id !== id);
   if (state.activeDocumentId === id) {
     state.activeDocumentId = state.documents[0]?.id || null;
-    state.activePage = 1;
+    state.activePage = state.documents.length ? getDocumentRange(state.documents[0]).start : 1;
   }
   renderDocumentList();
   renderActivePage();
@@ -1933,9 +2091,12 @@ function clearAll() {
 }
 
 [elements.addFilesButton, elements.uploadZone, elements.emptyUploadButton].forEach((trigger) => {
-  trigger.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
+  trigger.addEventListener("click", () => {
+    if (elements.fileInput.disabled) {
+      toast("正在恢复最近进度，请稍候再添加文件。");
+      return;
+    }
+    elements.fileInput.value = "";
     elements.fileInput.click();
   });
 });
@@ -1944,23 +2105,50 @@ elements.uploadSectionToggle.addEventListener("click", () => {
   setUploadSectionCollapsed(expanded);
 });
 elements.fileInput.addEventListener("change", (event) => {
-  handleFiles(event.target.files);
+  const files = [...event.target.files];
   event.target.value = "";
+  handleFiles(files);
+});
+
+elements.importForm.addEventListener("submit", confirmImport);
+[elements.cancelImportButton, elements.closeImportButton].forEach((button) => {
+  button.addEventListener("click", cancelImport);
+});
+elements.importDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  cancelImport();
+});
+elements.importFileList.addEventListener("change", (event) => {
+  if (event.target.type === "radio") {
+    const row = event.target.closest("[data-import-file]");
+    const isRange = event.target.value === "range";
+    row.querySelector(".import-page-range").hidden = !isRange;
+    row.querySelectorAll('input[type="number"]').forEach((input) => { input.disabled = !isRange; });
+    if (isRange) row.querySelector("[data-range-start]").focus();
+  }
+  elements.importError.hidden = true;
+  updateImportSummary();
+});
+elements.importFileList.addEventListener("input", () => {
+  elements.importError.hidden = true;
+  updateImportSummary();
 });
 
 ["dragenter", "dragover"].forEach((type) => {
-  elements.uploadZone.addEventListener(type, (event) => {
+  elements.sourcePanel.addEventListener(type, (event) => {
     event.preventDefault();
     elements.uploadZone.classList.add("drag-over");
   });
 });
 ["dragleave", "drop"].forEach((type) => {
-  elements.uploadZone.addEventListener(type, (event) => {
+  elements.sourcePanel.addEventListener(type, (event) => {
     event.preventDefault();
     elements.uploadZone.classList.remove("drag-over");
   });
 });
-elements.uploadZone.addEventListener("drop", (event) => handleFiles(event.dataTransfer.files));
+elements.sourcePanel.addEventListener("drop", (event) => {
+  if (!elements.fileInput.disabled) handleFiles(event.dataTransfer.files);
+});
 
 elements.documentList.addEventListener("click", async (event) => {
   const remove = event.target.closest("[data-remove-document]");
@@ -1980,7 +2168,7 @@ elements.documentList.addEventListener("click", async (event) => {
   const documentButton = event.target.closest("[data-open-document]");
   if (documentButton) {
     state.activeDocumentId = documentButton.dataset.openDocument;
-    state.activePage = 1;
+    state.activePage = getDocumentRange(getActiveDocument()).start;
     renderDocumentList();
     await renderActivePage();
     scheduleRecoverySave();
@@ -1988,12 +2176,13 @@ elements.documentList.addEventListener("click", async (event) => {
 });
 
 elements.prevPageButton.addEventListener("click", async () => {
-  if (state.activePage <= 1) return;
+  const document = getActiveDocument();
+  if (!document || state.activePage <= getDocumentRange(document).start) return;
   scrollToPage(state.activePage - 1);
 });
 elements.nextPageButton.addEventListener("click", async () => {
   const document = getActiveDocument();
-  if (!document || state.activePage >= document.pages) return;
+  if (!document || state.activePage >= getDocumentRange(document).end) return;
   scrollToPage(state.activePage + 1);
 });
 
@@ -2254,7 +2443,7 @@ window.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-  if (!elements.previewModal.hidden || !getActiveDocument()) return;
+  if (elements.importDialog.open || !elements.previewModal.hidden || !getActiveDocument()) return;
   const target = event.target;
   if (
     target instanceof HTMLElement &&
